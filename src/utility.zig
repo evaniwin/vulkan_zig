@@ -1,6 +1,6 @@
 const validationlayers: [1][*c]const u8 = .{"VK_LAYER_KHRONOS_validation"};
 const enablevalidationlayers: bool = true;
-var cstringarray: helper.cstringarray = .{ .allocator = main.allocator, .freelist1 = undefined };
+
 pub const graphicalcontext = struct {
     allocator: std.mem.Allocator,
     instance: vk.VkInstance,
@@ -18,11 +18,12 @@ pub const graphicalcontext = struct {
         createinfo.pApplicationInfo = &appinfo;
 
         var extensioncount: u32 = 0;
-        const extensions: [*c]const [*c]const u8 = getrequiredextensions(allocator, &extensioncount);
-        defer cstringarray.free(0);
+        const extensions: helper.extensionarray = getrequiredextensions(allocator, &extensioncount);
+        defer extensions.free();
+
         checkextensions(allocator, extensioncount, extensions);
         createinfo.enabledExtensionCount = extensioncount;
-        createinfo.ppEnabledExtensionNames = extensions;
+        createinfo.ppEnabledExtensionNames = extensions.extensions();
 
         if (!(checkvalidationlayersupport(allocator) and enablevalidationlayers)) {
             @panic("unable to find validation layers");
@@ -51,19 +52,15 @@ pub const graphicalcontext = struct {
         self.allocator.destroy(self);
     }
 
-    fn getrequiredextensions(allocator: std.mem.Allocator, extensioncount: *u32) [*c]const [*c]const u8 {
+    fn getrequiredextensions(allocator: std.mem.Allocator, extensioncount: *u32) helper.extensionarray {
         var glfwextensioncount: u32 = 0;
         const glfwextensions = glfw.glfwGetRequiredInstanceExtensions(&glfwextensioncount);
-        const extensionlist: ?[2][*c]const u8 = .{ "VK_EXT_DEBUG_UTILS_EXTENSION_NAME", null };
+        const extensionlist: [2]?[*c]const u8 = .{ "VK_EXT_DEBUG_UTILS_EXTENSION_NAME", null };
         if (enablevalidationlayers) {
             var arrayptrs = std.ArrayList([*c][*c]const u8).init(allocator);
             defer arrayptrs.deinit();
             extensioncount.* = glfwextensioncount + @as(u32, @intCast(extensionlist.?.len - 1));
-            const arr = cstringarray.allocateassign(
-                @intCast(extensioncount.*),
-                &arrayptrs,
-                0,
-            ) catch |err| {
+            const arr = helper.extensionarray.joinstr(allocator, extensioncount.*, &arrayptrs) catch |err| {
                 std.log.err("Unable to allocate memory for vulkan extension array {s}", .{@errorName(err)});
                 @panic("Memory allocation Error");
             };
