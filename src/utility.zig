@@ -18,12 +18,12 @@ pub const graphicalcontext = struct {
         createinfo.pApplicationInfo = &appinfo;
 
         var extensioncount: u32 = 0;
-        const extensions: helper.extensionarray = getrequiredextensions(allocator, &extensioncount);
+        var extensions: *helper.extensionarray = getrequiredextensions(allocator, &extensioncount);
         defer extensions.free();
-
-        checkextensions(allocator, extensioncount, extensions);
+        const extensions_c = extensions.extensions();
+        checkextensions(allocator, extensioncount, extensions_c);
         createinfo.enabledExtensionCount = extensioncount;
-        createinfo.ppEnabledExtensionNames = extensions.extensions();
+        createinfo.ppEnabledExtensionNames = extensions_c;
 
         if (!(checkvalidationlayersupport(allocator) and enablevalidationlayers)) {
             @panic("unable to find validation layers");
@@ -52,23 +52,44 @@ pub const graphicalcontext = struct {
         self.allocator.destroy(self);
     }
 
-    fn getrequiredextensions(allocator: std.mem.Allocator, extensioncount: *u32) helper.extensionarray {
+    fn getrequiredextensions(allocator: std.mem.Allocator, extensioncount: *u32) *helper.extensionarray {
         var glfwextensioncount: u32 = 0;
         const glfwextensions = glfw.glfwGetRequiredInstanceExtensions(&glfwextensioncount);
-        const extensionlist: [2]?[*c]const u8 = .{ "VK_EXT_DEBUG_UTILS_EXTENSION_NAME", null };
+
+        var extensionlist: [2]?[*c]const u8 = .{ "VK_EXT_DEBUG_UTILS_EXTENSION_NAME", null };
+        var arrayptrs = std.ArrayList(helper.stringarrayc).init(allocator);
+        defer arrayptrs.deinit();
+        arrayptrs.append(helper.stringarrayc{.string = @ptrCast(glfwextensions),.len = glfwextensioncount}) catch |err| {
+            std.log.err("Unable to allocate memory for vulkan extension array {s}", .{@errorName(err)});
+            @panic("Memory allocation Error");
+        };
         if (enablevalidationlayers) {
-            var arrayptrs = std.ArrayList([*c][*c]const u8).init(allocator);
-            defer arrayptrs.deinit();
-            extensioncount.* = glfwextensioncount + @as(u32, @intCast(extensionlist.?.len - 1));
-            const arr = helper.extensionarray.joinstr(allocator, extensioncount.*, &arrayptrs) catch |err| {
+            extensioncount.* = glfwextensioncount + @as(u32, @intCast(extensionlist.len - 1));
+            arrayptrs.append(helper.stringarrayc{.string = @ptrCast(&extensionlist[0]),.len = 1}) catch |err| {
+                std.log.err("Unable to allocate memory for vulkan extension array {s}", .{@errorName(err)});
+                @panic("Memory allocation Error");
+            };
+            const arr = helper.extensionarray.joinstr(
+                allocator,
+                extensioncount.*,
+                &arrayptrs,
+            ) catch |err| {
                 std.log.err("Unable to allocate memory for vulkan extension array {s}", .{@errorName(err)});
                 @panic("Memory allocation Error");
             };
 
             return arr;
         } else {
+            const arr = helper.extensionarray.joinstr(
+                allocator,
+                extensioncount.*,
+                &arrayptrs,
+            ) catch |err| {
+                std.log.err("Unable to allocate memory for vulkan extension array {s}", .{@errorName(err)});
+                @panic("Memory allocation Error");
+            };
             extensioncount.* = glfwextensioncount;
-            return glfwextensions;
+            return arr;
         }
     }
 
