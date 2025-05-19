@@ -69,7 +69,7 @@ pub const graphicalcontext = struct {
         if (!enablevalidationlayers) {
             return;
         }
-        const raw = vk.vkGetInstanceProcAddr(self.instance, "vkCreateDebugUtilsMessengerEXT");
+        const raw = vk.vkGetInstanceProcAddr(self.instance, "vkDestroyDebugUtilsMessengerEXT");
         if (raw == null) {
             std.log.err("Unable to destroy debug messanger", .{});
         } else {
