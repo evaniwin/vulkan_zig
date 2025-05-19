@@ -4,6 +4,7 @@ const validationlayerverbose: bool = false;
 pub const graphicalcontext = struct {
     allocator: std.mem.Allocator,
     instance: vk.VkInstance,
+    physicaldevice: vk.VkPhysicalDevice,
     debugmessanger: vk.VkDebugUtilsMessengerEXT,
     pub fn init(allocator: std.mem.Allocator) !*graphicalcontext {
         //allocate an instance of this struct
@@ -16,13 +17,61 @@ pub const graphicalcontext = struct {
         createinstance(self);
         //setup debug messanger for vulkan validation layer
         try createdebugmessanger(self);
-
+        try pickphysicaldevice(self);
         return self;
     }
     pub fn deinit(self: *graphicalcontext) void {
         destroydebugmessanger(self);
         vk.vkDestroyInstance(self.instance, null);
         self.allocator.destroy(self);
+    }
+    fn pickphysicaldevice(self: *graphicalcontext) !void {
+        var devicecount: u32 = 0;
+        _ = vk.vkEnumeratePhysicalDevices(self.instance, &devicecount, null);
+        if (devicecount == 0) {
+            std.log.err("unable to find gpu with vulkan support", .{});
+            return error.UnableToFindGPU;
+        }
+        const devicelist = self.allocator.alloc(vk.VkPhysicalDevice, devicecount) catch |err| {
+            std.log.err("Unable to allocate memory for vulkan device list {s}", .{@errorName(err)});
+            return err;
+        };
+        defer self.allocator.free(devicelist);
+        _ = vk.vkEnumeratePhysicalDevices(self.instance, &devicecount, &devicelist[0]);
+
+        const devicescorelist = self.allocator.alloc(u32, devicecount) catch |err| {
+            std.log.err("Unable to allocate memory for vulkan device score list {s}", .{@errorName(err)});
+            return err;
+        };
+        defer self.allocator.free(devicescorelist);
+
+        self.physicaldevice = null;
+        for (0..devicecount) |i| {
+            devicescorelist[i] = ratedevicecompatability(devicelist[i]);
+        }
+        //find best device based on score
+        var topscore: u32 = 0;
+        var topdevice: usize = 0;
+        for (0..devicecount) |i| {
+            if (topscore < devicescorelist[i]) {
+                topscore = devicescorelist[i];
+                topdevice = i;
+            }
+        }
+        if (topscore > 0) {
+            self.physicaldevice = devicelist[topdevice];
+        }
+        if (self.physicaldevice == null) {
+            std.log.err("Unable to find suitable Gpu", .{});
+            return error.UnableToFIndSuitableGPU;
+        }
+    }
+    fn ratedevicecompatability(device: vk.VkPhysicalDevice) u32 {
+        var deviceproperties: vk.VkPhysicalDeviceProperties = .{};
+        var devicefeatures: vk.VkPhysicalDeviceFeatures = .{};
+        vk.vkGetPhysicalDeviceProperties(device, &deviceproperties);
+        vk.vkGetPhysicalDeviceFeatures(device, &devicefeatures);
+        return 1;
     }
     ///setup common parameters to create debug messanger
     fn setdebugmessangercreateinfo(createinfo: *vk.VkDebugUtilsMessengerCreateInfoEXT) void {
