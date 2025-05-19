@@ -6,6 +6,34 @@ pub const graphicalcontext = struct {
     instance: vk.VkInstance,
     debugmessanger: vk.VkDebugUtilsMessengerEXT,
     pub fn init(allocator: std.mem.Allocator) !*graphicalcontext {
+        //allocate an instance of this struct
+        const self: *graphicalcontext = allocator.create(graphicalcontext) catch |err| {
+            std.log.err("Unable to allocate memory for vulkan instance: {s}", .{@errorName(err)});
+            return err;
+        };
+        self.allocator = allocator;
+        //create an vulkan instance
+        createinstance(self);
+        //setup debug messanger for vulkan validation layer
+        try createdebugmessanger(self);
+
+        return self;
+    }
+    pub fn deinit(self: *graphicalcontext) void {
+        destroydebugmessanger(self);
+        vk.vkDestroyInstance(self.instance, null);
+        self.allocator.destroy(self);
+    }
+    ///setup common parameters to create debug messanger
+    fn setdebugmessangercreateinfo(createinfo: *vk.VkDebugUtilsMessengerCreateInfoEXT) void {
+        createinfo.sType = vk.VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
+        createinfo.messageSeverity = vk.VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT | vk.VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT | vk.VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
+        createinfo.messageType = vk.VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT | vk.VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT | vk.VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
+        createinfo.pfnUserCallback = debugCallback;
+        createinfo.pUserData = null;
+    }
+    ///create an vulkan instance
+    fn createinstance(self: *graphicalcontext) void {
         var appinfo: vk.VkApplicationInfo = .{};
         appinfo.sType = vk.VK_STRUCTURE_TYPE_APPLICATION_INFO;
         appinfo.pApplicationName = "vulkan-zig triangle example";
@@ -19,14 +47,14 @@ pub const graphicalcontext = struct {
         createinfo.pApplicationInfo = &appinfo;
 
         var extensioncount: u32 = 0;
-        var extensions: *helper.extensionarray = getrequiredextensions(allocator, &extensioncount);
+        var extensions: *helper.extensionarray = getrequiredextensions(self.allocator, &extensioncount);
         defer extensions.free();
         const extensions_c = extensions.extensions();
-        checkextensions(allocator, extensioncount, extensions_c);
+        checkextensions(self.allocator, extensioncount, extensions_c);
         createinfo.enabledExtensionCount = extensioncount;
         createinfo.ppEnabledExtensionNames = extensions_c;
 
-        if (!checkvalidationlayersupport(allocator) and enablevalidationlayers) {
+        if (!checkvalidationlayersupport(self.allocator) and enablevalidationlayers) {
             @panic("unable to find validation layers");
         }
         if (enablevalidationlayers) {
@@ -34,37 +62,18 @@ pub const graphicalcontext = struct {
             createinfo.ppEnabledLayerNames = &validationlayers[0];
 
             var debugcreateInfo: vk.VkDebugUtilsMessengerCreateInfoEXT = .{};
-            debugcreateInfo.sType = vk.VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
-            debugcreateInfo.messageSeverity = vk.VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT | vk.VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT | vk.VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
-            debugcreateInfo.messageType = vk.VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT | vk.VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT | vk.VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
-            debugcreateInfo.pfnUserCallback = debugCallback;
-            debugcreateInfo.pUserData = null;
+            setdebugmessangercreateinfo(&debugcreateInfo);
             createinfo.pNext = &debugcreateInfo;
         } else {
             createinfo.enabledLayerCount = 0;
             createinfo.pNext = null;
         }
-
-        const self: *graphicalcontext = allocator.create(graphicalcontext) catch |err| {
-            std.log.err("Unable to allocate memory for vulkan instance: {s}", .{@errorName(err)});
-            return err;
-        };
-        self.allocator = allocator;
-
         if (vk.vkCreateInstance(&createinfo, null, &self.instance) != vk.VK_SUCCESS) {
             std.log.err("error", .{});
             @panic("failed to create instance!");
         }
-        try createdebugmessanger(self);
-
-        return self;
     }
-    pub fn deinit(self: *graphicalcontext) void {
-        destroydebugmessanger(self);
-        vk.vkDestroyInstance(self.instance, null);
-        self.allocator.destroy(self);
-    }
-
+    ///destroy the debug messanger created via createdebugmessanger
     fn destroydebugmessanger(self: *graphicalcontext) void {
         if (!enablevalidationlayers) {
             return;
@@ -78,7 +87,7 @@ pub const graphicalcontext = struct {
             DestroyDebugUtilsMessengerEXT.?(self.instance, self.debugmessanger, null);
         }
     }
-
+    ///create a debug messanger for vulkan validation layer
     fn createdebugmessanger(self: *graphicalcontext) !void {
         if (!enablevalidationlayers) {
             return;
@@ -89,11 +98,7 @@ pub const graphicalcontext = struct {
         }
         const CreateDebugUtilsMessengerEXT: vk.PFN_vkCreateDebugUtilsMessengerEXT = @ptrCast(raw.?);
         var debugcreateInfo: vk.VkDebugUtilsMessengerCreateInfoEXT = .{};
-        debugcreateInfo.sType = vk.VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
-        debugcreateInfo.messageSeverity = vk.VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT | vk.VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT | vk.VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
-        debugcreateInfo.messageType = vk.VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT | vk.VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT | vk.VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
-        debugcreateInfo.pfnUserCallback = debugCallback;
-        debugcreateInfo.pUserData = null;
+        setdebugmessangercreateinfo(&debugcreateInfo);
         // CreateDebugUtilsMessengerEXT(instance,*pCreateInfo,*pAllocator, *pDebugMessenger)
         if (CreateDebugUtilsMessengerEXT.?(self.instance, &debugcreateInfo, null, &self.debugmessanger) != vk.VK_SUCCESS) {
             std.log.err("failed to setup debug messager", .{});
