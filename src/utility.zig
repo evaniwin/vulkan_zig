@@ -13,6 +13,7 @@ pub const graphicalcontext = struct {
             return err;
         };
         self.allocator = allocator;
+        errdefer deinit(self);
         //create an vulkan instance
         createinstance(self);
         //setup debug messanger for vulkan validation layer
@@ -47,7 +48,7 @@ pub const graphicalcontext = struct {
 
         self.physicaldevice = null;
         for (0..devicecount) |i| {
-            devicescorelist[i] = ratedevicecompatability(devicelist[i]);
+            devicescorelist[i] = try ratedevicecompatability(self, devicelist[i]);
         }
         //find best device based on score
         var topscore: u32 = 0;
@@ -55,7 +56,7 @@ pub const graphicalcontext = struct {
         for (0..devicecount) |i| {
             if (topscore < devicescorelist[i]) {
                 topscore = devicescorelist[i];
-                topdevice = i;
+                topdevice = @intCast(i);
             }
         }
         if (topscore > 0) {
@@ -66,12 +67,45 @@ pub const graphicalcontext = struct {
             return error.UnableToFIndSuitableGPU;
         }
     }
-    fn ratedevicecompatability(device: vk.VkPhysicalDevice) u32 {
+    fn getqueuefamily(self: *graphicalcontext, device: vk.VkPhysicalDevice, queueflagbits: u32, exactmatch: bool) !?u32 {
+        var found: bool = false;
+        var queuefamilycount: u32 = 0;
+        vk.vkGetPhysicalDeviceQueueFamilyProperties(device, &queuefamilycount, null);
+        const queuefamilieslist = self.allocator.alloc(vk.VkQueueFamilyProperties, queuefamilycount) catch |err| {
+            std.log.err("Unable to allocate memory for vulkan device list {s}", .{@errorName(err)});
+            return err;
+        };
+        defer self.allocator.free(queuefamilieslist);
+        vk.vkGetPhysicalDeviceQueueFamilyProperties(device, &queuefamilycount, queuefamilieslist.ptr);
+        for (0..queuefamilycount) |i| {
+            if (exactmatch) {
+                if (queuefamilieslist[i].queueFlags == queueflagbits) {
+                    found = true;
+                    queuefamilycount = @intCast(i);
+                }
+            } else {
+                if ((queuefamilieslist[i].queueFlags & queueflagbits) == queueflagbits) {
+                    found = true;
+                    queuefamilycount = @intCast(i);
+                }
+            }
+        }
+        if (found) {
+            return queuefamilycount;
+        } else {
+            return null;
+        }
+    }
+    fn ratedevicecompatability(self: *graphicalcontext, device: vk.VkPhysicalDevice) !u32 {
         var deviceproperties: vk.VkPhysicalDeviceProperties = .{};
         var devicefeatures: vk.VkPhysicalDeviceFeatures = .{};
         vk.vkGetPhysicalDeviceProperties(device, &deviceproperties);
         vk.vkGetPhysicalDeviceFeatures(device, &devicefeatures);
-        return 1;
+        const quefamily = try getqueuefamily(self, device, vk.VK_QUEUE_GRAPHICS_BIT, false);
+        if (quefamily != null) {
+            return 1;
+        }
+        return 0;
     }
     ///setup common parameters to create debug messanger
     fn setdebugmessangercreateinfo(createinfo: *vk.VkDebugUtilsMessengerCreateInfoEXT) void {
