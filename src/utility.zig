@@ -1,9 +1,10 @@
 const validationlayers: [1][*c]const u8 = .{"VK_LAYER_KHRONOS_validation"};
 const enablevalidationlayers: bool = true;
-
+const validationlayerverbose: bool = false;
 pub const graphicalcontext = struct {
     allocator: std.mem.Allocator,
     instance: vk.VkInstance,
+    debugmessanger: vk.VkDebugUtilsMessengerEXT,
     pub fn init(allocator: std.mem.Allocator) !*graphicalcontext {
         var appinfo: vk.VkApplicationInfo = .{};
         appinfo.sType = vk.VK_STRUCTURE_TYPE_APPLICATION_INFO;
@@ -25,14 +26,23 @@ pub const graphicalcontext = struct {
         createinfo.enabledExtensionCount = extensioncount;
         createinfo.ppEnabledExtensionNames = extensions_c;
 
-        if (!(checkvalidationlayersupport(allocator) and enablevalidationlayers)) {
+        if (!checkvalidationlayersupport(allocator) and enablevalidationlayers) {
             @panic("unable to find validation layers");
         }
         if (enablevalidationlayers) {
             createinfo.enabledLayerCount = @intCast(validationlayers.len);
             createinfo.ppEnabledLayerNames = &validationlayers[0];
+
+            var debugcreateInfo: vk.VkDebugUtilsMessengerCreateInfoEXT = .{};
+            debugcreateInfo.sType = vk.VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
+            debugcreateInfo.messageSeverity = vk.VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT | vk.VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT | vk.VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
+            debugcreateInfo.messageType = vk.VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT | vk.VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT | vk.VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
+            debugcreateInfo.pfnUserCallback = debugCallback;
+            debugcreateInfo.pUserData = null;
+            createinfo.pNext = &debugcreateInfo;
         } else {
             createinfo.enabledLayerCount = 0;
+            createinfo.pNext = null;
         }
 
         const self: *graphicalcontext = allocator.create(graphicalcontext) catch |err| {
@@ -45,27 +55,66 @@ pub const graphicalcontext = struct {
             std.log.err("error", .{});
             @panic("failed to create instance!");
         }
+        try createdebugmessanger(self);
+
         return self;
     }
     pub fn deinit(self: *graphicalcontext) void {
+        destroydebugmessanger(self);
         vk.vkDestroyInstance(self.instance, null);
         self.allocator.destroy(self);
+    }
+
+    fn destroydebugmessanger(self: *graphicalcontext) void {
+        if (!enablevalidationlayers) {
+            return;
+        }
+        const raw = vk.vkGetInstanceProcAddr(self.instance, "vkCreateDebugUtilsMessengerEXT");
+        if (raw == null) {
+            std.log.err("Unable to destroy debug messanger", .{});
+        } else {
+            const DestroyDebugUtilsMessengerEXT: vk.PFN_vkDestroyDebugUtilsMessengerEXT = @ptrCast(raw.?);
+            //DestroyDebugUtilsMessengerEXT(instance, debugMessenger, *pAllocator)
+            DestroyDebugUtilsMessengerEXT.?(self.instance, self.debugmessanger, null);
+        }
+    }
+
+    fn createdebugmessanger(self: *graphicalcontext) !void {
+        if (!enablevalidationlayers) {
+            return;
+        }
+        const raw = vk.vkGetInstanceProcAddr(self.instance, "vkCreateDebugUtilsMessengerEXT");
+        if (raw == null) {
+            return error.VK_ERROR_EXTENSION_NOT_PRESENT;
+        }
+        const CreateDebugUtilsMessengerEXT: vk.PFN_vkCreateDebugUtilsMessengerEXT = @ptrCast(raw.?);
+        var debugcreateInfo: vk.VkDebugUtilsMessengerCreateInfoEXT = .{};
+        debugcreateInfo.sType = vk.VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
+        debugcreateInfo.messageSeverity = vk.VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT | vk.VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT | vk.VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
+        debugcreateInfo.messageType = vk.VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT | vk.VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT | vk.VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
+        debugcreateInfo.pfnUserCallback = debugCallback;
+        debugcreateInfo.pUserData = null;
+        // CreateDebugUtilsMessengerEXT(instance,*pCreateInfo,*pAllocator, *pDebugMessenger)
+        if (CreateDebugUtilsMessengerEXT.?(self.instance, &debugcreateInfo, null, &self.debugmessanger) != vk.VK_SUCCESS) {
+            std.log.err("failed to setup debug messager", .{});
+            return error.SetupDebugMessanger;
+        }
     }
 
     fn getrequiredextensions(allocator: std.mem.Allocator, extensioncount: *u32) *helper.extensionarray {
         var glfwextensioncount: u32 = 0;
         const glfwextensions = glfw.glfwGetRequiredInstanceExtensions(&glfwextensioncount);
 
-        var extensionlist: [2]?[*c]const u8 = .{ "VK_EXT_DEBUG_UTILS_EXTENSION_NAME", null };
         var arrayptrs = std.ArrayList(helper.stringarrayc).init(allocator);
         defer arrayptrs.deinit();
-        arrayptrs.append(helper.stringarrayc{.string = @ptrCast(glfwextensions),.len = glfwextensioncount}) catch |err| {
+        arrayptrs.append(helper.stringarrayc{ .string = @ptrCast(glfwextensions), .len = glfwextensioncount }) catch |err| {
             std.log.err("Unable to allocate memory for vulkan extension array {s}", .{@errorName(err)});
             @panic("Memory allocation Error");
         };
         if (enablevalidationlayers) {
+            var extensionlist: [2]?[*c]const u8 = .{ "VK_EXT_debug_utils", null };
             extensioncount.* = glfwextensioncount + @as(u32, @intCast(extensionlist.len - 1));
-            arrayptrs.append(helper.stringarrayc{.string = @ptrCast(&extensionlist[0]),.len = 1}) catch |err| {
+            arrayptrs.append(helper.stringarrayc{ .string = @ptrCast(&extensionlist[0]), .len = 1 }) catch |err| {
                 std.log.err("Unable to allocate memory for vulkan extension array {s}", .{@errorName(err)});
                 @panic("Memory allocation Error");
             };
@@ -80,6 +129,7 @@ pub const graphicalcontext = struct {
 
             return arr;
         } else {
+            extensioncount.* = glfwextensioncount;
             const arr = helper.extensionarray.joinstr(
                 allocator,
                 extensioncount.*,
@@ -88,7 +138,6 @@ pub const graphicalcontext = struct {
                 std.log.err("Unable to allocate memory for vulkan extension array {s}", .{@errorName(err)});
                 @panic("Memory allocation Error");
             };
-            extensioncount.* = glfwextensioncount;
             return arr;
         }
     }
@@ -158,6 +207,32 @@ pub const graphicalcontext = struct {
         std.log.info("{d}/{d} extensions found", .{ extensions, reqextensioncount });
     }
 };
+
+export fn debugCallback(
+    messageSeverity: vk.VkDebugUtilsMessageSeverityFlagBitsEXT,
+    messageType: vk.VkDebugUtilsMessageTypeFlagsEXT,
+    pCallbackData: [*c]const vk.VkDebugUtilsMessengerCallbackDataEXT,
+    pUserData: ?*anyopaque,
+) callconv(.c) vk.VkBool32 {
+    _ = pUserData;
+    const messagetype = switch (messageType) {
+        vk.VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT => "General",
+        vk.VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT => "validation",
+        vk.VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT => "Performance",
+        vk.VK_DEBUG_UTILS_MESSAGE_TYPE_DEVICE_ADDRESS_BINDING_BIT_EXT => "Device Adress binding",
+        else => "Unknown",
+    };
+    if (validationlayerverbose and (messageSeverity == vk.VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT)) {
+        std.log.info("validation layer: {s} : {s}", .{ messagetype, pCallbackData.*.pMessage });
+    } else if (messageSeverity == vk.VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT) {
+        std.log.info("validation layer: {s} : {s}", .{ messagetype, pCallbackData.*.pMessage });
+    } else if (messageSeverity == vk.VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT) {
+        std.log.warn("validation layer: {s} : {s}", .{ messagetype, pCallbackData.*.pMessage });
+    } else if (messageSeverity == vk.VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT) {
+        std.log.err("validation layer: {s} : {s}", .{ messagetype, pCallbackData.*.pMessage });
+    }
+    return vk.VK_FALSE;
+}
 
 const glfw = @cImport({
     @cInclude("GLFW/glfw3.h");

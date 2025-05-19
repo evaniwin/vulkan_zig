@@ -1,12 +1,12 @@
 pub const extensionarray = struct {
     allocator: std.mem.Allocator,
     extensioncount: u32,
-    array: []?[*c]const u8,
+    array: []?*const u8,
     pub fn joinstr(allocator: std.mem.Allocator, extensioncount: u32, arrayptrlist: *std.ArrayList(stringarrayc)) !*extensionarray {
         const self = try allocator.create(extensionarray);
         self.allocator = allocator;
         self.extensioncount = extensioncount;
-        self.array = try allocator.alloc(?[*c]const u8, extensioncount + 1);
+        self.array = try allocator.alloc(?*const u8, extensioncount + 1);
         var count: u32 = 0;
         for (arrayptrlist.items) |itm| {
             var i: usize = 0;
