@@ -3,28 +3,84 @@ const enablevalidationlayers: bool = true;
 const validationlayerverbose: bool = false;
 pub const graphicalcontext = struct {
     allocator: std.mem.Allocator,
+    window: *vk.GLFWwindow,
     instance: vk.VkInstance,
     physicaldevice: vk.VkPhysicalDevice,
+    device: vk.VkDevice,
+    graphicsqueue: vk.VkQueue,
+    presentqueue: vk.VkQueue,
     debugmessanger: vk.VkDebugUtilsMessengerEXT,
-    pub fn init(allocator: std.mem.Allocator) !*graphicalcontext {
+    surface: vk.VkSurfaceKHR,
+    instanceextensions: *helper.extensionarray,
+    pub fn init(allocator: std.mem.Allocator, window: *vk.GLFWwindow) !*graphicalcontext {
         //allocate an instance of this struct
         const self: *graphicalcontext = allocator.create(graphicalcontext) catch |err| {
             std.log.err("Unable to allocate memory for vulkan instance: {s}", .{@errorName(err)});
             return err;
         };
         self.allocator = allocator;
+        self.window = window;
         errdefer deinit(self);
         //create an vulkan instance
         createinstance(self);
         //setup debug messanger for vulkan validation layer
         try createdebugmessanger(self);
+        try createsurface(self);
         try pickphysicaldevice(self);
+        try createlogicaldevice(self);
         return self;
     }
     pub fn deinit(self: *graphicalcontext) void {
+        self.instanceextensions.free();
+        destroylogicaldevice(self);
         destroydebugmessanger(self);
+        vk.vkDestroySurfaceKHR(self.instance, self.surface, null);
         vk.vkDestroyInstance(self.instance, null);
         self.allocator.destroy(self);
+    }
+    fn createsurface(self: *graphicalcontext) !void {
+        if (vk.glfwCreateWindowSurface(self.instance, self.window, null, &self.surface) != vk.VK_SUCCESS) {
+            std.log.err("Glfw surface creation failed", .{});
+            return error.GlfwSurfaceCreationFailed;
+        }
+    }
+    fn createlogicaldevice(self: *graphicalcontext) !void {
+        //specify queues to be created
+        const quefamily: graphicsqueue = try getqueuefamily(self, self.physicaldevice, vk.VK_QUEUE_GRAPHICS_BIT, false);
+        if (quefamily.graphicsqueueset == false) @panic("Unable to get required que");
+        var quecreateinfos: [1]vk.VkDeviceQueueCreateInfo = .{.{}};
+        var quepriority: [1]f32 = .{1.0};
+        quecreateinfos[0].sType = vk.VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
+        quecreateinfos[0].queueFamilyIndex = quefamily.graphicsqueueindex;
+        quecreateinfos[0].queueCount = quecreateinfos.len;
+
+        quecreateinfos[0].pQueuePriorities = &quepriority[0];
+        //specify device features
+        var physicaldevicefeatures: vk.VkPhysicalDeviceFeatures = .{};
+
+        //creating logicaldevice
+        var createinfo: vk.VkDeviceCreateInfo = .{};
+        createinfo.sType = vk.VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
+        createinfo.pQueueCreateInfos = &quecreateinfos[0];
+        createinfo.queueCreateInfoCount = quecreateinfos.len;
+        createinfo.pEnabledFeatures = &physicaldevicefeatures;
+
+        createinfo.enabledExtensionCount = 0;
+
+        if (enablevalidationlayers) {
+            createinfo.enabledLayerCount = @intCast(validationlayers.len);
+            createinfo.ppEnabledLayerNames = &validationlayers[0];
+        } else {
+            createinfo.enabledLayerCount = 0;
+        }
+        if (vk.vkCreateDevice(self.physicaldevice, &createinfo, null, &self.device) != vk.VK_SUCCESS) {
+            std.log.err("unable to create logical device", .{});
+            return error.FailedLogicalDeviceCreation;
+        }
+        vk.vkGetDeviceQueue(self.device, quefamily.graphicsqueueindex, 0, &self.graphicsqueue);
+    }
+    fn destroylogicaldevice(self: *graphicalcontext) void {
+        vk.vkDestroyDevice(self.device, null);
     }
     fn pickphysicaldevice(self: *graphicalcontext) !void {
         var devicecount: u32 = 0;
@@ -67,8 +123,7 @@ pub const graphicalcontext = struct {
             return error.UnableToFIndSuitableGPU;
         }
     }
-    fn getqueuefamily(self: *graphicalcontext, device: vk.VkPhysicalDevice, queueflagbits: u32, exactmatch: bool) !?u32 {
-        var found: bool = false;
+    fn getqueuefamily(self: *graphicalcontext, device: vk.VkPhysicalDevice, queueflagbits: u32, exactmatch: bool) !graphicsqueue {
         var queuefamilycount: u32 = 0;
         vk.vkGetPhysicalDeviceQueueFamilyProperties(device, &queuefamilycount, null);
         const queuefamilieslist = self.allocator.alloc(vk.VkQueueFamilyProperties, queuefamilycount) catch |err| {
@@ -77,24 +132,34 @@ pub const graphicalcontext = struct {
         };
         defer self.allocator.free(queuefamilieslist);
         vk.vkGetPhysicalDeviceQueueFamilyProperties(device, &queuefamilycount, queuefamilieslist.ptr);
+        var queuefamilyfound: graphicsqueue = .{ .graphicsqueueindex = 0, .graphicsqueueset = false, .presentfamilyset = false, .presentfamilyindex = 0 };
         for (0..queuefamilycount) |i| {
             if (exactmatch) {
                 if (queuefamilieslist[i].queueFlags == queueflagbits) {
-                    found = true;
-                    queuefamilycount = @intCast(i);
+                    queuefamilyfound.graphicsqueueset = true;
+                    queuefamilyfound.graphicsqueueindex = @intCast(i);
+                } else {
+                    queuefamilyfound.graphicsqueueset = false;
                 }
             } else {
                 if ((queuefamilieslist[i].queueFlags & queueflagbits) == queueflagbits) {
-                    found = true;
-                    queuefamilycount = @intCast(i);
+                    queuefamilyfound.graphicsqueueset = true;
+                    queuefamilyfound.graphicsqueueindex = @intCast(i);
+                } else {
+                    queuefamilyfound.graphicsqueueset = false;
                 }
             }
+            if (queuefamilyfound.graphicsqueueset) {
+                var presentsupport: vk.VkBool32 = vk.VK_FALSE;
+                _ = vk.vkGetPhysicalDeviceSurfaceSupportKHR(device, @intCast(i), self.surface, &presentsupport);
+                if (presentsupport == vk.VK_TRUE) {
+                    queuefamilyfound.presentfamilyset = true;
+                    queuefamilyfound.presentfamilyindex = @intCast(i);
+                }
+            }
+            if (queuefamilyfound.graphicsqueueset and queuefamilyfound.presentfamilyset) break;
         }
-        if (found) {
-            return queuefamilycount;
-        } else {
-            return null;
-        }
+        return queuefamilyfound;
     }
     fn ratedevicecompatability(self: *graphicalcontext, device: vk.VkPhysicalDevice) !u32 {
         var deviceproperties: vk.VkPhysicalDeviceProperties = .{};
@@ -102,9 +167,10 @@ pub const graphicalcontext = struct {
         vk.vkGetPhysicalDeviceProperties(device, &deviceproperties);
         vk.vkGetPhysicalDeviceFeatures(device, &devicefeatures);
         const quefamily = try getqueuefamily(self, device, vk.VK_QUEUE_GRAPHICS_BIT, false);
-        if (quefamily != null) {
+        if (quefamily.graphicsqueueset != false) {
             return 1;
         }
+
         return 0;
     }
     ///setup common parameters to create debug messanger
@@ -130,9 +196,8 @@ pub const graphicalcontext = struct {
         createinfo.pApplicationInfo = &appinfo;
 
         var extensioncount: u32 = 0;
-        var extensions: *helper.extensionarray = getrequiredextensions(self.allocator, &extensioncount);
-        defer extensions.free();
-        const extensions_c = extensions.extensions();
+        try getrequiredextensions(self, &extensioncount);
+        const extensions_c = self.instanceextensions.extensions();
         checkextensions(self.allocator, extensioncount, extensions_c);
         createinfo.enabledExtensionCount = extensioncount;
         createinfo.ppEnabledExtensionNames = extensions_c;
@@ -189,11 +254,11 @@ pub const graphicalcontext = struct {
         }
     }
 
-    fn getrequiredextensions(allocator: std.mem.Allocator, extensioncount: *u32) *helper.extensionarray {
+    fn getrequiredextensions(self: *graphicalcontext, extensioncount: *u32) !void {
         var glfwextensioncount: u32 = 0;
-        const glfwextensions = glfw.glfwGetRequiredInstanceExtensions(&glfwextensioncount);
+        const glfwextensions = vk.glfwGetRequiredInstanceExtensions(&glfwextensioncount);
 
-        var arrayptrs = std.ArrayList(helper.stringarrayc).init(allocator);
+        var arrayptrs = std.ArrayList(helper.stringarrayc).init(self.allocator);
         defer arrayptrs.deinit();
         arrayptrs.append(helper.stringarrayc{ .string = @ptrCast(glfwextensions), .len = glfwextensioncount }) catch |err| {
             std.log.err("Unable to allocate memory for vulkan extension array {s}", .{@errorName(err)});
@@ -207,7 +272,7 @@ pub const graphicalcontext = struct {
                 @panic("Memory allocation Error");
             };
             const arr = helper.extensionarray.joinstr(
-                allocator,
+                self.allocator,
                 extensioncount.*,
                 &arrayptrs,
             ) catch |err| {
@@ -215,18 +280,18 @@ pub const graphicalcontext = struct {
                 @panic("Memory allocation Error");
             };
 
-            return arr;
+            self.instanceextensions = arr;
         } else {
             extensioncount.* = glfwextensioncount;
             const arr = helper.extensionarray.joinstr(
-                allocator,
+                self.allocator,
                 extensioncount.*,
                 &arrayptrs,
             ) catch |err| {
                 std.log.err("Unable to allocate memory for vulkan extension array {s}", .{@errorName(err)});
                 @panic("Memory allocation Error");
             };
-            return arr;
+            self.instanceextensions = arr;
         }
     }
 
@@ -295,7 +360,12 @@ pub const graphicalcontext = struct {
         std.log.info("{d}/{d} extensions found", .{ extensions, reqextensioncount });
     }
 };
-
+const graphicsqueue = struct {
+    graphicsqueueindex: u32,
+    presentfamilyindex: u32,
+    graphicsqueueset: bool,
+    presentfamilyset: bool,
+};
 export fn debugCallback(
     messageSeverity: vk.VkDebugUtilsMessageSeverityFlagBitsEXT,
     messageType: vk.VkDebugUtilsMessageTypeFlagsEXT,
@@ -322,11 +392,9 @@ export fn debugCallback(
     return vk.VK_FALSE;
 }
 
-const glfw = @cImport({
-    @cInclude("GLFW/glfw3.h");
-});
 const vk = @cImport({
     @cInclude("vulkan/vulkan.h");
+    @cInclude("GLFW/glfw3.h");
 });
 const helper = @import("helpers.zig");
 const main = @import("main.zig");
