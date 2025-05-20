@@ -7,6 +7,7 @@ pub const graphicalcontext = struct {
     instance: vk.VkInstance,
     physicaldevice: vk.VkPhysicalDevice,
     device: vk.VkDevice,
+    queuelist: *graphicsqueue,
     graphicsqueue: vk.VkQueue,
     presentqueue: vk.VkQueue,
     debugmessanger: vk.VkDebugUtilsMessengerEXT,
@@ -27,6 +28,7 @@ pub const graphicalcontext = struct {
         try createdebugmessanger(self);
         try createsurface(self);
         try pickphysicaldevice(self);
+        self.queuelist = try graphicsqueue.getqueuefamily(self, self.physicaldevice);
         try createlogicaldevice(self);
         return self;
     }
@@ -36,6 +38,7 @@ pub const graphicalcontext = struct {
         destroydebugmessanger(self);
         vk.vkDestroySurfaceKHR(self.instance, self.surface, null);
         vk.vkDestroyInstance(self.instance, null);
+        self.queuelist.deinit();
         self.allocator.destroy(self);
     }
     fn createsurface(self: *graphicalcontext) !void {
@@ -45,17 +48,38 @@ pub const graphicalcontext = struct {
         }
     }
     fn createlogicaldevice(self: *graphicalcontext) !void {
-        //specify queues to be created
-        const quefamily: graphicsqueue = try getqueuefamily(self, self.physicaldevice, vk.VK_QUEUE_GRAPHICS_BIT, false);
-        if (quefamily.graphicsqueueset == false) @panic("Unable to get required que");
-        var quecreateinfos: [1]vk.VkDeviceQueueCreateInfo = .{.{}};
-        var quepriority: [1]f32 = .{1.0};
-        quecreateinfos[0].sType = vk.VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
-        quecreateinfos[0].queueFamilyIndex = quefamily.graphicsqueueindex;
-        quecreateinfos[0].queueCount = quecreateinfos.len;
-
-        quecreateinfos[0].pQueuePriorities = &quepriority[0];
-        //specify device features
+        self.queuelist.queueflagsmatch(vk.VK_QUEUE_GRAPHICS_BIT);
+        const ques1num = self.queuelist.queuesfound;
+        const ques1 = try self.allocator.dupe(u32, self.queuelist.searchresult);
+        defer self.allocator.free(ques1);
+        self.queuelist.checkpresentCapable(self, null);
+        const ques2num = self.queuelist.queuesfound;
+        const ques2 = try self.allocator.dupe(u32, self.queuelist.searchresult);
+        defer self.allocator.free(ques2);
+        var quefamilyindex: [2]u32 = undefined;
+        var uniquefound: bool = false;
+        for (0..ques1num) |i| {
+            for (0..ques2num) |j| {
+                if (ques1[i] != ques2[j]) {
+                    quefamilyindex = .{ ques1[i], ques2[j] };
+                    uniquefound = true;
+                }
+            }
+        }
+        if (!uniquefound) {
+            std.log.err("Unable to find unique quefamilies", .{});
+            return error.UnableToFindUniqueQueueFamilyIndex;
+        }
+        var quecreateinfos: [quefamilyindex.len]vk.VkDeviceQueueCreateInfo = undefined;
+        var quepriority: f32 = 1.0;
+        for (0..quefamilyindex.len) |i| {
+            quecreateinfos[i].sType = vk.VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
+            quecreateinfos[i].pNext = null;
+            quecreateinfos[i].flags = 0;
+            quecreateinfos[i].queueFamilyIndex = quefamilyindex[i];
+            quecreateinfos[i].queueCount = 1;
+            quecreateinfos[i].pQueuePriorities = &quepriority;
+        } //specify device features
         var physicaldevicefeatures: vk.VkPhysicalDeviceFeatures = .{};
 
         //creating logicaldevice
@@ -77,7 +101,8 @@ pub const graphicalcontext = struct {
             std.log.err("unable to create logical device", .{});
             return error.FailedLogicalDeviceCreation;
         }
-        vk.vkGetDeviceQueue(self.device, quefamily.graphicsqueueindex, 0, &self.graphicsqueue);
+        vk.vkGetDeviceQueue(self.device, quefamilyindex[0], 0, &self.graphicsqueue);
+        vk.vkGetDeviceQueue(self.device, quefamilyindex[1], 0, &self.presentqueue);
     }
     fn destroylogicaldevice(self: *graphicalcontext) void {
         vk.vkDestroyDevice(self.device, null);
@@ -123,55 +148,35 @@ pub const graphicalcontext = struct {
             return error.UnableToFIndSuitableGPU;
         }
     }
-    fn getqueuefamily(self: *graphicalcontext, device: vk.VkPhysicalDevice, queueflagbits: u32, exactmatch: bool) !graphicsqueue {
-        var queuefamilycount: u32 = 0;
-        vk.vkGetPhysicalDeviceQueueFamilyProperties(device, &queuefamilycount, null);
-        const queuefamilieslist = self.allocator.alloc(vk.VkQueueFamilyProperties, queuefamilycount) catch |err| {
-            std.log.err("Unable to allocate memory for vulkan device list {s}", .{@errorName(err)});
-            return err;
-        };
-        defer self.allocator.free(queuefamilieslist);
-        vk.vkGetPhysicalDeviceQueueFamilyProperties(device, &queuefamilycount, queuefamilieslist.ptr);
-        var queuefamilyfound: graphicsqueue = .{ .graphicsqueueindex = 0, .graphicsqueueset = false, .presentfamilyset = false, .presentfamilyindex = 0 };
-        for (0..queuefamilycount) |i| {
-            if (exactmatch) {
-                if (queuefamilieslist[i].queueFlags == queueflagbits) {
-                    queuefamilyfound.graphicsqueueset = true;
-                    queuefamilyfound.graphicsqueueindex = @intCast(i);
-                } else {
-                    queuefamilyfound.graphicsqueueset = false;
-                }
-            } else {
-                if ((queuefamilieslist[i].queueFlags & queueflagbits) == queueflagbits) {
-                    queuefamilyfound.graphicsqueueset = true;
-                    queuefamilyfound.graphicsqueueindex = @intCast(i);
-                } else {
-                    queuefamilyfound.graphicsqueueset = false;
-                }
-            }
-            if (queuefamilyfound.graphicsqueueset) {
-                var presentsupport: vk.VkBool32 = vk.VK_FALSE;
-                _ = vk.vkGetPhysicalDeviceSurfaceSupportKHR(device, @intCast(i), self.surface, &presentsupport);
-                if (presentsupport == vk.VK_TRUE) {
-                    queuefamilyfound.presentfamilyset = true;
-                    queuefamilyfound.presentfamilyindex = @intCast(i);
-                }
-            }
-            if (queuefamilyfound.graphicsqueueset and queuefamilyfound.presentfamilyset) break;
-        }
-        return queuefamilyfound;
-    }
+
     fn ratedevicecompatability(self: *graphicalcontext, device: vk.VkPhysicalDevice) !u32 {
+        var score: u32 = 0;
         var deviceproperties: vk.VkPhysicalDeviceProperties = .{};
         var devicefeatures: vk.VkPhysicalDeviceFeatures = .{};
         vk.vkGetPhysicalDeviceProperties(device, &deviceproperties);
         vk.vkGetPhysicalDeviceFeatures(device, &devicefeatures);
-        const quefamily = try getqueuefamily(self, device, vk.VK_QUEUE_GRAPHICS_BIT, false);
-        if (quefamily.graphicsqueueset != false) {
-            return 1;
-        }
 
-        return 0;
+        //score based on available queue families
+        const queuelist = try graphicsqueue.getqueuefamily(self, device);
+        defer queuelist.deinit();
+        queuelist.queueflagsmatch(vk.VK_QUEUE_GRAPHICS_BIT);
+        if (queuelist.queuesfound > 0) score = score + 20;
+        queuelist.queueflagsmatch(vk.VK_QUEUE_COMPUTE_BIT);
+        if (queuelist.queuesfound > 0) score = score + 10;
+        queuelist.queueflagsmatch(vk.VK_QUEUE_TRANSFER_BIT);
+        if (queuelist.queuesfound > 0) score = score + 10;
+        queuelist.queueflagsmatch(vk.VK_QUEUE_SPARSE_BINDING_BIT);
+        if (queuelist.queuesfound > 0) score = score + 10;
+        queuelist.queueflagsmatch(vk.VK_QUEUE_PROTECTED_BIT);
+        if (queuelist.queuesfound > 0) score = score + 10;
+        queuelist.queueflagsmatch(vk.VK_QUEUE_VIDEO_DECODE_BIT_KHR);
+        if (queuelist.queuesfound > 0) score = score + 10;
+        queuelist.queueflagsmatch(vk.VK_QUEUE_VIDEO_ENCODE_BIT_KHR);
+        if (queuelist.queuesfound > 0) score = score + 10;
+        queuelist.queueflagsmatch(vk.VK_QUEUE_OPTICAL_FLOW_BIT_NV);
+        if (queuelist.queuesfound > 0) score = score + 10;
+
+        return score;
     }
     ///setup common parameters to create debug messanger
     fn setdebugmessangercreateinfo(createinfo: *vk.VkDebugUtilsMessengerCreateInfoEXT) void {
@@ -361,10 +366,80 @@ pub const graphicalcontext = struct {
     }
 };
 const graphicsqueue = struct {
-    graphicsqueueindex: u32,
-    presentfamilyindex: u32,
-    graphicsqueueset: bool,
-    presentfamilyset: bool,
+    allocator: std.mem.Allocator,
+    availablequeues: u32,
+    queues: []vk.VkQueueFamilyProperties,
+    queuesfound: u32,
+    searchresult: []u32,
+    inUseQueue: []bool,
+    pub fn getqueuefamily(graphicalcontextself: *graphicalcontext, device: vk.VkPhysicalDevice) !*graphicsqueue {
+        var self: *graphicsqueue = try graphicalcontextself.allocator.create(graphicsqueue);
+        self.allocator = graphicalcontextself.allocator;
+        vk.vkGetPhysicalDeviceQueueFamilyProperties(device, &self.availablequeues, null);
+        self.queues = try graphicalcontextself.allocator.alloc(vk.VkQueueFamilyProperties, self.availablequeues);
+        vk.vkGetPhysicalDeviceQueueFamilyProperties(device, &self.availablequeues, self.queues.ptr);
+        self.searchresult = try graphicalcontextself.allocator.alloc(u32, self.availablequeues);
+        self.inUseQueue = try graphicalcontextself.allocator.alloc(bool, self.availablequeues);
+        return self;
+    }
+    pub fn deinit(self: *graphicsqueue) void {
+        self.allocator.free(self.inUseQueue);
+        self.allocator.free(self.searchresult);
+        self.allocator.free(self.queues);
+        self.allocator.destroy(self);
+    }
+    pub fn queueflagsmatch(self: *graphicsqueue, queueFlags: u32) void {
+        var curind: u32 = 0;
+        for (0..self.queues.len) |i| {
+            if ((self.queues[i].queueFlags & queueFlags) == queueFlags) {
+                self.searchresult[curind] = @intCast(i);
+                curind = curind + 1;
+            }
+        }
+        self.queuesfound = curind;
+    }
+    pub fn queueflagsmatchexact(self: *graphicsqueue, queueFlags: u32) void {
+        var curind: u32 = 0;
+        for (0..self.queues.len) |i| {
+            if (self.queues[i].queueFlags == queueFlags) {
+                self.searchresult[curind] = @intCast(i);
+                curind = curind + 1;
+            }
+        }
+        self.queuesfound = curind;
+    }
+    pub fn checkpresentCapable(self: *graphicsqueue, graphicalcontextself: *graphicalcontext, physicaldevice: vk.VkPhysicalDevice) void {
+        var presentsupport: vk.VkBool32 = vk.VK_FALSE;
+        var curind: u32 = 0;
+        var curPhysicaldevice: vk.VkPhysicalDevice = undefined;
+        if (physicaldevice != null) {
+            curPhysicaldevice = physicaldevice;
+        } else {
+            curPhysicaldevice = graphicalcontextself.physicaldevice;
+        }
+        for (0..self.queues.len) |i| {
+            _ = vk.vkGetPhysicalDeviceSurfaceSupportKHR(
+                curPhysicaldevice,
+                @intCast(i),
+                graphicalcontextself.surface,
+                &presentsupport,
+            );
+            if (presentsupport == vk.VK_TRUE) {
+                self.searchresult[curind] = @intCast(i);
+                curind = curind + 1;
+            }
+        }
+        self.queuesfound = curind;
+    }
+    pub fn checkifinuse(self: *graphicsqueue, Queue: u32) bool {
+        return self.inUseQueue[Queue];
+    }
+    pub fn markQueueInuse(self: *graphicsqueue, Queue: u32) void {
+        self.inUseQueue[Queue] = true;
+    }
+    pub fn unmarkQueueInuse(self: *graphicsqueue, Queue: u32) void {
+        self.inUseQueue[Queue] = false;
+    }
 };
 export fn debugCallback(
     messageSeverity: vk.VkDebugUtilsMessageSeverityFlagBitsEXT,
