@@ -1,4 +1,5 @@
 const validationlayers: [1][*c]const u8 = .{"VK_LAYER_KHRONOS_validation"};
+const deviceextensions: [1][*c]const u8 = .{"VK_KHR_swapchain"};
 const enablevalidationlayers: bool = true;
 const validationlayerverbose: bool = false;
 pub const graphicalcontext = struct {
@@ -88,12 +89,12 @@ pub const graphicalcontext = struct {
         createinfo.pQueueCreateInfos = &quecreateinfos[0];
         createinfo.queueCreateInfoCount = quecreateinfos.len;
         createinfo.pEnabledFeatures = &physicaldevicefeatures;
-
-        createinfo.enabledExtensionCount = 0;
+        createinfo.enabledExtensionCount = @intCast(deviceextensions.len);
+        createinfo.ppEnabledExtensionNames = @as([*c]const [*c]const u8, &deviceextensions[0]);
 
         if (enablevalidationlayers) {
             createinfo.enabledLayerCount = @intCast(validationlayers.len);
-            createinfo.ppEnabledLayerNames = &validationlayers[0];
+            createinfo.ppEnabledLayerNames = @as([*c]const [*c]const u8, &validationlayers[0]);
         } else {
             createinfo.enabledLayerCount = 0;
         }
@@ -156,6 +157,12 @@ pub const graphicalcontext = struct {
         vk.vkGetPhysicalDeviceProperties(device, &deviceproperties);
         vk.vkGetPhysicalDeviceFeatures(device, &devicefeatures);
 
+        //score based on available extension
+
+        if (try checkdeviceextensionsupport(self, device)) {
+            score = score + 50;
+        }
+
         //score based on available queue families
         const queuelist = try graphicsqueue.getqueuefamily(self, device);
         defer queuelist.deinit();
@@ -177,6 +184,34 @@ pub const graphicalcontext = struct {
         if (queuelist.queuesfound > 0) score = score + 10;
 
         return score;
+    }
+    fn checkdeviceextensionsupport(self: *graphicalcontext, device: vk.VkPhysicalDevice) !bool {
+        var extensioncount: u32 = 0;
+        _ = vk.vkEnumerateDeviceExtensionProperties(device, null, &extensioncount, null);
+        var extensionproperties = try self.allocator.alloc(vk.VkExtensionProperties, extensioncount);
+        defer self.allocator.free(extensionproperties);
+        _ = vk.vkEnumerateDeviceExtensionProperties(device, null, &extensioncount, &extensionproperties[0]);
+        var requiredestensionsavailable: bool = false;
+        var extensionsfound: u32 = 0;
+        for (0..deviceextensions.len) |i| {
+            requiredestensionsavailable = false;
+            for (0..extensioncount) |j| {
+                if (std.mem.orderZ(u8, deviceextensions[i], @ptrCast(&extensionproperties[j].extensionName)) == .eq) {
+                    requiredestensionsavailable = true;
+                    extensionsfound = extensionsfound + 1;
+                }
+            }
+            if (!requiredestensionsavailable) {
+                std.log.err("Unable to find Required Device Extensions: {s}", .{deviceextensions[i]});
+            }
+        }
+        std.log.info("{d}/{d} Device Extensions found", .{ extensionsfound, deviceextensions.len });
+        if (extensionsfound == deviceextensions.len) {
+            return true;
+        } else {
+            std.log.err("Unable to find Required Device Extensions", .{});
+            return error.UnableToFindRequiredDeviceExtensions;
+        }
     }
     ///setup common parameters to create debug messanger
     fn setdebugmessangercreateinfo(createinfo: *vk.VkDebugUtilsMessengerCreateInfoEXT) void {
