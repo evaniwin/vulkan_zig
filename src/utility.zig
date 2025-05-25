@@ -9,10 +9,14 @@ pub const graphicalcontext = struct {
     physicaldevice: vk.VkPhysicalDevice,
     device: vk.VkDevice,
     queuelist: *graphicsqueue,
-    graphicsqueue: vk.VkQueue,
-    presentqueue: vk.VkQueue,
+    graphicsqueue: queuestr,
+    presentqueue: queuestr,
     debugmessanger: vk.VkDebugUtilsMessengerEXT,
     surface: vk.VkSurfaceKHR,
+    swapchain: vk.VkSwapchainKHR,
+    swapchainimages: []vk.VkImage,
+    swapchainimageformat: vk.VkFormat,
+    swapchainextent: vk.VkExtent2D,
     instanceextensions: *helper.extensionarray,
     pub fn init(allocator: std.mem.Allocator, window: *vk.GLFWwindow) !*graphicalcontext {
         //allocate an instance of this struct
@@ -31,16 +35,71 @@ pub const graphicalcontext = struct {
         try pickphysicaldevice(self);
         self.queuelist = try graphicsqueue.getqueuefamily(self, self.physicaldevice);
         try createlogicaldevice(self);
+        try createswapchain(self);
         return self;
     }
     pub fn deinit(self: *graphicalcontext) void {
         self.instanceextensions.free();
+        freeswapchain(self);
         destroylogicaldevice(self);
         destroydebugmessanger(self);
         vk.vkDestroySurfaceKHR(self.instance, self.surface, null);
         vk.vkDestroyInstance(self.instance, null);
         self.queuelist.deinit();
         self.allocator.destroy(self);
+    }
+    pub fn createswapchain(self: *graphicalcontext) !void {
+        const swapchainsprt: *swapchainsupport = try swapchainsupport.getSwapchainDetails(self, self.physicaldevice);
+        defer swapchainsprt.deinit();
+        const surfaceformat: vk.VkSurfaceFormatKHR = try swapchainsprt.chooseformat();
+        const presentmode: vk.VkPresentModeKHR = swapchainsprt.choosepresentmode();
+        const extent: vk.VkExtent2D = swapchainsprt.chooseswapextent();
+        var imagecount: u32 = swapchainsprt.capabilities.minImageCount + 1;
+        if (swapchainsprt.capabilities.maxImageCount > 0 and imagecount > swapchainsprt.capabilities.maxImageCount) {
+            imagecount = swapchainsprt.capabilities.maxImageCount;
+        }
+        var createinfo: vk.VkSwapchainCreateInfoKHR = .{};
+        createinfo.sType = vk.VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
+        createinfo.surface = self.surface;
+
+        createinfo.minImageCount = imagecount;
+        createinfo.imageFormat = surfaceformat.format;
+        createinfo.imageColorSpace = surfaceformat.colorSpace;
+        createinfo.imageExtent = extent;
+        createinfo.imageArrayLayers = 1;
+        createinfo.imageUsage = vk.VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+
+        if (self.presentqueue.familyindex != self.graphicsqueue.familyindex) {
+            const queuefamilyindices: [2]u32 = .{ self.presentqueue.familyindex, self.graphicsqueue.familyindex };
+            createinfo.imageSharingMode = vk.VK_SHARING_MODE_CONCURRENT;
+            createinfo.queueFamilyIndexCount = 2;
+            createinfo.pQueueFamilyIndices = &queuefamilyindices[0];
+        } else {
+            //use this if graphics que and present que are same
+            createinfo.imageSharingMode = vk.VK_SHARING_MODE_EXCLUSIVE;
+            createinfo.queueFamilyIndexCount = 0;
+            createinfo.pQueueFamilyIndices = null;
+        }
+
+        createinfo.preTransform = swapchainsprt.capabilities.currentTransform;
+        createinfo.compositeAlpha = vk.VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
+
+        createinfo.presentMode = presentmode;
+        createinfo.clipped = vk.VK_TRUE;
+
+        createinfo.oldSwapchain = null;
+        if (vk.vkCreateSwapchainKHR(self.device, &createinfo, null, &self.swapchain) != vk.VK_SUCCESS) {
+            std.log.err("Unable to Create Swapchain", .{});
+            return error.SwapChainCreationFailed;
+        }
+
+        _ = vk.vkGetSwapchainImagesKHR(self.device, self.swapchain, &imagecount, null);
+        self.swapchainimages = try self.allocator.alloc(vk.VkImage, imagecount);
+        _ = vk.vkGetSwapchainImagesKHR(self.device, self.swapchain, &imagecount, &self.swapchainimages[0]);
+    }
+    fn freeswapchain(self: *graphicalcontext) void {
+        self.allocator.free(self.swapchainimages);
+        vk.vkDestroySwapchainKHR(self.device, self.swapchain, null);
     }
     fn createsurface(self: *graphicalcontext) !void {
         if (vk.glfwCreateWindowSurface(self.instance, self.window, null, &self.surface) != vk.VK_SUCCESS) {
@@ -53,7 +112,7 @@ pub const graphicalcontext = struct {
         const ques1num = self.queuelist.queuesfound;
         const ques1 = try self.allocator.dupe(u32, self.queuelist.searchresult);
         defer self.allocator.free(ques1);
-        self.queuelist.checkpresentCapable(self, null);
+        self.queuelist.checkpresentCapable(self, self.physicaldevice);
         const ques2num = self.queuelist.queuesfound;
         const ques2 = try self.allocator.dupe(u32, self.queuelist.searchresult);
         defer self.allocator.free(ques2);
@@ -102,8 +161,10 @@ pub const graphicalcontext = struct {
             std.log.err("unable to create logical device", .{});
             return error.FailedLogicalDeviceCreation;
         }
-        vk.vkGetDeviceQueue(self.device, quefamilyindex[0], 0, &self.graphicsqueue);
-        vk.vkGetDeviceQueue(self.device, quefamilyindex[1], 0, &self.presentqueue);
+        vk.vkGetDeviceQueue(self.device, quefamilyindex[0], 0, &self.graphicsqueue.queue);
+        self.graphicsqueue.familyindex = quefamilyindex[0];
+        vk.vkGetDeviceQueue(self.device, quefamilyindex[1], 0, &self.presentqueue.queue);
+        self.presentqueue.familyindex = quefamilyindex[1];
     }
     fn destroylogicaldevice(self: *graphicalcontext) void {
         vk.vkDestroyDevice(self.device, null);
@@ -130,6 +191,7 @@ pub const graphicalcontext = struct {
 
         self.physicaldevice = null;
         for (0..devicecount) |i| {
+            std.log.info("checking device information", .{});
             devicescorelist[i] = try ratedevicecompatability(self, devicelist[i]);
         }
         //find best device based on score
@@ -157,12 +219,20 @@ pub const graphicalcontext = struct {
         vk.vkGetPhysicalDeviceProperties(device, &deviceproperties);
         vk.vkGetPhysicalDeviceFeatures(device, &devicefeatures);
 
-        //score based on available extension
-
-        if (try checkdeviceextensionsupport(self, device)) {
-            score = score + 50;
+        //check extension
+        const devicecompatibility = try checkdeviceextensionsupport(self, device);
+        if (!devicecompatibility) {
+            std.log.warn("Required extensions not found", .{});
+            return 0;
         }
 
+        //check swapchain
+        const currentswapchain = try swapchainsupport.getSwapchainDetails(self, device);
+        defer currentswapchain.deinit();
+        if (currentswapchain.formatcount == 0 or currentswapchain.presentmodecount == 0) {
+            std.log.warn("NO adecuuate swapchain found for device", .{});
+            return 0;
+        }
         //score based on available queue families
         const queuelist = try graphicsqueue.getqueuefamily(self, device);
         defer queuelist.deinit();
@@ -210,7 +280,7 @@ pub const graphicalcontext = struct {
             return true;
         } else {
             std.log.err("Unable to find Required Device Extensions", .{});
-            return error.UnableToFindRequiredDeviceExtensions;
+            return false;
         }
     }
     ///setup common parameters to create debug messanger
@@ -400,6 +470,64 @@ pub const graphicalcontext = struct {
         std.log.info("{d}/{d} extensions found", .{ extensions, reqextensioncount });
     }
 };
+const swapchainsupport = struct {
+    allocator: std.mem.Allocator,
+    capabilities: vk.VkSurfaceCapabilitiesKHR,
+    formatcount: u32,
+    formats: []vk.VkSurfaceFormatKHR,
+    presentmodecount: u32,
+    presentmode: []vk.VkPresentModeKHR,
+    graphicalcontextself: *graphicalcontext,
+    pub fn getSwapchainDetails(graphicalcontextself: *graphicalcontext, device: vk.VkPhysicalDevice) !*swapchainsupport {
+        var self: *swapchainsupport = try graphicalcontextself.allocator.create(swapchainsupport);
+        self.allocator = graphicalcontextself.allocator;
+        self.graphicalcontextself = graphicalcontextself;
+        _ = vk.vkGetPhysicalDeviceSurfaceCapabilitiesKHR(device, graphicalcontextself.surface, &self.capabilities);
+        _ = vk.vkGetPhysicalDeviceSurfaceFormatsKHR(device, graphicalcontextself.surface, &self.formatcount, null);
+        self.formats = try graphicalcontextself.allocator.alloc(vk.VkSurfaceFormatKHR, @max(self.formatcount, 1));
+        _ = vk.vkGetPhysicalDeviceSurfaceFormatsKHR(device, graphicalcontextself.surface, &self.formatcount, &self.formats[0]);
+        _ = vk.vkGetPhysicalDeviceSurfacePresentModesKHR(device, graphicalcontextself.surface, &self.presentmodecount, null);
+        self.presentmode = try graphicalcontextself.allocator.alloc(vk.VkPresentModeKHR, @max(self.presentmodecount, 1));
+        _ = vk.vkGetPhysicalDeviceSurfacePresentModesKHR(device, graphicalcontextself.surface, &self.presentmodecount, &self.presentmode[0]);
+        return self;
+    }
+    pub fn deinit(self: *swapchainsupport) void {
+        self.allocator.free(self.formats);
+        self.allocator.free(self.presentmode);
+        self.allocator.destroy(self);
+    }
+    pub fn chooseformat(self: *swapchainsupport) !vk.VkSurfaceFormatKHR {
+        for (0..self.formatcount) |i| {
+            if (self.formats[i].colorSpace == vk.VK_COLOR_SPACE_SRGB_NONLINEAR_KHR and self.formats[i].format == vk.VK_FORMAT_B8G8R8A8_SRGB) {
+                return self.formats[i];
+            }
+        }
+        return error.UnableTOFindFormats;
+    }
+    pub fn choosepresentmode(self: *swapchainsupport) vk.VkPresentModeKHR {
+        for (0..self.presentmodecount) |i| {
+            if (self.presentmode[i] == vk.VK_PRESENT_MODE_MAILBOX_KHR) {
+                return self.presentmode[i];
+            }
+        }
+        return vk.VK_PRESENT_MODE_FIFO_KHR;
+    }
+    pub fn chooseswapextent(self: *swapchainsupport) vk.VkExtent2D {
+        if (self.capabilities.currentExtent.width != std.math.maxInt(u32)) {
+            return self.capabilities.currentExtent;
+        }
+        var glfwsize: [2]c_int = undefined;
+        vk.glfwGetFramebufferSize(self.graphicalcontextself.window, &glfwsize[0], &glfwsize[1]);
+        var actualextent: vk.VkExtent2D = .{ .width = @intCast(glfwsize[0]), .height = @intCast(glfwsize[1]) };
+        actualextent.width = std.math.clamp(actualextent.width, self.capabilities.minImageExtent.width, self.capabilities.maxImageExtent.width);
+        actualextent.height = std.math.clamp(actualextent.height, self.capabilities.minImageExtent.height, self.capabilities.maxImageExtent.height);
+        return actualextent;
+    }
+};
+const queuestr = struct {
+    queue: vk.VkQueue,
+    familyindex: u32,
+};
 const graphicsqueue = struct {
     allocator: std.mem.Allocator,
     availablequeues: u32,
@@ -446,15 +574,9 @@ const graphicsqueue = struct {
     pub fn checkpresentCapable(self: *graphicsqueue, graphicalcontextself: *graphicalcontext, physicaldevice: vk.VkPhysicalDevice) void {
         var presentsupport: vk.VkBool32 = vk.VK_FALSE;
         var curind: u32 = 0;
-        var curPhysicaldevice: vk.VkPhysicalDevice = undefined;
-        if (physicaldevice != null) {
-            curPhysicaldevice = physicaldevice;
-        } else {
-            curPhysicaldevice = graphicalcontextself.physicaldevice;
-        }
         for (0..self.queues.len) |i| {
             _ = vk.vkGetPhysicalDeviceSurfaceSupportKHR(
-                curPhysicaldevice,
+                physicaldevice,
                 @intCast(i),
                 graphicalcontextself.surface,
                 &presentsupport,
@@ -502,10 +624,8 @@ export fn debugCallback(
     return vk.VK_FALSE;
 }
 
-const vk = @cImport({
-    @cInclude("vulkan/vulkan.h");
-    @cInclude("GLFW/glfw3.h");
-});
+pub const vk = graphics.vk;
+const graphics = @import("graphics.zig");
 const helper = @import("helpers.zig");
 const main = @import("main.zig");
 const std = @import("std");

@@ -101,7 +101,7 @@ const freetype = @cImport({
     @cInclude("freetype2/freetype/freetype.h");
     @cInclude("freetype2/ft2build.h");
 });
-const vk = @cImport({
+pub const vk = @cImport({
     @cInclude("vulkan/vulkan.h");
     @cInclude("GLFW/glfw3.h");
 });
