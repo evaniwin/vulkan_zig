@@ -17,6 +17,7 @@ pub const graphicalcontext = struct {
     swapchainimages: []vk.VkImage,
     swapchainimageformat: vk.VkFormat,
     swapchainextent: vk.VkExtent2D,
+    swapchainimageviews: []vk.VkImageView,
     instanceextensions: *helper.extensionarray,
     pub fn init(allocator: std.mem.Allocator, window: *vk.GLFWwindow) !*graphicalcontext {
         //allocate an instance of this struct
@@ -36,10 +37,12 @@ pub const graphicalcontext = struct {
         self.queuelist = try graphicsqueue.getqueuefamily(self, self.physicaldevice);
         try createlogicaldevice(self);
         try createswapchain(self);
+        try createimageviews(self);
         return self;
     }
     pub fn deinit(self: *graphicalcontext) void {
         self.instanceextensions.free();
+        destroyimageviews(self);
         freeswapchain(self);
         destroylogicaldevice(self);
         destroydebugmessanger(self);
@@ -48,12 +51,47 @@ pub const graphicalcontext = struct {
         self.queuelist.deinit();
         self.allocator.destroy(self);
     }
-    pub fn createswapchain(self: *graphicalcontext) !void {
+    fn createimageviews(self: *graphicalcontext) !void {
+        self.swapchainimageviews = try self.allocator.alloc(vk.VkImageView, self.swapchainimages.len);
+        for (0..self.swapchainimageviews.len) |i| {
+            var createinfo: vk.VkImageViewCreateInfo = .{};
+            createinfo.sType = vk.VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+            createinfo.image = self.swapchainimages[i];
+
+            createinfo.viewType = vk.VK_IMAGE_VIEW_TYPE_2D;
+            createinfo.format = self.swapchainimageformat;
+
+            createinfo.components.r = vk.VK_COMPONENT_SWIZZLE_IDENTITY;
+            createinfo.components.g = vk.VK_COMPONENT_SWIZZLE_IDENTITY;
+            createinfo.components.b = vk.VK_COMPONENT_SWIZZLE_IDENTITY;
+            createinfo.components.a = vk.VK_COMPONENT_SWIZZLE_IDENTITY;
+
+            createinfo.subresourceRange.aspectMask = vk.VK_IMAGE_ASPECT_COLOR_BIT;
+            createinfo.subresourceRange.baseMipLevel = 0;
+            createinfo.subresourceRange.levelCount = 1;
+            createinfo.subresourceRange.baseArrayLayer = 0;
+            createinfo.subresourceRange.layerCount = 1;
+
+            if (vk.vkCreateImageView(self.device, &createinfo, null, &self.swapchainimageviews[i]) != vk.VK_SUCCESS) {
+                std.log.err("Failed to Create image Views", .{});
+                return error.FailedToCreateImageView;
+            }
+        }
+    }
+    fn destroyimageviews(self: *graphicalcontext) void {
+        for (self.swapchainimageviews) |imageview| {
+            vk.vkDestroyImageView(self.device, imageview, null);
+        }
+        self.allocator.free(self.swapchainimageviews);
+    }
+    fn createswapchain(self: *graphicalcontext) !void {
         const swapchainsprt: *swapchainsupport = try swapchainsupport.getSwapchainDetails(self, self.physicaldevice);
         defer swapchainsprt.deinit();
         const surfaceformat: vk.VkSurfaceFormatKHR = try swapchainsprt.chooseformat();
+        self.swapchainimageformat = surfaceformat.format;
         const presentmode: vk.VkPresentModeKHR = swapchainsprt.choosepresentmode();
         const extent: vk.VkExtent2D = swapchainsprt.chooseswapextent();
+        self.swapchainextent = extent;
         var imagecount: u32 = swapchainsprt.capabilities.minImageCount + 1;
         if (swapchainsprt.capabilities.maxImageCount > 0 and imagecount > swapchainsprt.capabilities.maxImageCount) {
             imagecount = swapchainsprt.capabilities.maxImageCount;
