@@ -2,6 +2,8 @@ const validationlayers: [1][*c]const u8 = .{"VK_LAYER_KHRONOS_validation"};
 const deviceextensions: [1][*c]const u8 = .{"VK_KHR_swapchain"};
 const enablevalidationlayers: bool = true;
 const validationlayerverbose: bool = false;
+const triangle_frag = @embedFile("triangle_frag.spv");
+const triangle_vert = @embedFile("triangle_vert.spv");
 pub const graphicalcontext = struct {
     allocator: std.mem.Allocator,
     window: *vk.GLFWwindow,
