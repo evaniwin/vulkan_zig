@@ -38,6 +38,7 @@ pub const graphicalcontext = struct {
         try createlogicaldevice(self);
         try createswapchain(self);
         try createimageviews(self);
+        try creategraphicspipeline(self);
         return self;
     }
     pub fn deinit(self: *graphicalcontext) void {
@@ -50,6 +51,9 @@ pub const graphicalcontext = struct {
         vk.vkDestroyInstance(self.instance, null);
         self.queuelist.deinit();
         self.allocator.destroy(self);
+    }
+    fn creategraphicspipeline(self: *graphicalcontext) !void {
+        _ = self;
     }
     fn createimageviews(self: *graphicalcontext) !void {
         self.swapchainimageviews = try self.allocator.alloc(vk.VkImageView, self.swapchainimages.len);

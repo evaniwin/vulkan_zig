@@ -3,7 +3,7 @@ const std = @import("std");
 // Although this function looks imperative, note that its job is to
 // declaratively construct a build graph that will be executed by an external
 // runner.
-pub fn build(b: *std.Build) void {
+pub fn build(b: *std.Build) !void {
     // Standard target options allows the person running `zig build` to choose
     // what target to build for. Here we do not override the defaults, which
     // means any target is allowed, and the default is native. Other options
@@ -32,11 +32,31 @@ pub fn build(b: *std.Build) void {
         .name = "vulkantest",
         .root_module = exe_mod,
     });
-
+    const compileshadersteps = b.step("compile-shaders", "Compile glsl Shaders");
+    {
+        var shader_dir = try std.fs.cwd().openDir("shaders", .{ .iterate = true });
+        var iter = shader_dir.iterate();
+        while (true) {
+            const file = try iter.next();
+            if (file == null) break;
+            if (std.mem.endsWith(u8, file.?.name, ".spv")) continue;
+            var nametoken = std.mem.tokenizeSequence(u8, file.?.name, ".");
+            const compile_cmd = b.addSystemCommand(&.{
+                "glslangValidator",
+                b.fmt("shaders/{s}", .{file.?.name}),
+                "-V",
+                "-o",
+                b.fmt("shaders/{s}_{s}.spv", .{ nametoken.next().?, nametoken.next().? }),
+            });
+            compileshadersteps.dependOn(&compile_cmd.step);
+        }
+    }
+    exe.step.dependOn(compileshadersteps);
     exe.linkLibC();
     exe.linkSystemLibrary("freetype2");
     exe.linkSystemLibrary("glfw");
     exe.linkSystemLibrary("vulkan");
+
     // This declares intent for the executable to be installed into the
     // standard location when the user invokes the "install" step (the default
     // step when running `zig build`).
