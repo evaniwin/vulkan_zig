@@ -2,8 +2,8 @@ const validationlayers: [1][*c]const u8 = .{"VK_LAYER_KHRONOS_validation"};
 const deviceextensions: [1][*c]const u8 = .{"VK_KHR_swapchain"};
 const enablevalidationlayers: bool = true;
 const validationlayerverbose: bool = false;
-const triangle_frag = @embedFile("triangle_frag.spv");
-const triangle_vert = @embedFile("triangle_vert.spv");
+const triangle_frag = @embedFile("spirv/triangle_frag.spv");
+const triangle_vert = @embedFile("spirv/triangle_vert.spv");
 pub const graphicalcontext = struct {
     allocator: std.mem.Allocator,
     window: *vk.GLFWwindow,
@@ -54,8 +54,29 @@ pub const graphicalcontext = struct {
         self.queuelist.deinit();
         self.allocator.destroy(self);
     }
+    fn createshadermodule(code: []const u32, self: *graphicalcontext) !vk.VkShaderModule {
+        var createinfo: vk.VkShaderModuleCreateInfo = .{};
+        createinfo.sType = vk.VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+        createinfo.codeSize = code.len * 4;
+        createinfo.pCode = @ptrCast(code);
+
+        var shadermodule: vk.VkShaderModule = undefined;
+        if (vk.vkCreateShaderModule(self.device, &createinfo, null, &shadermodule) != vk.VK_SUCCESS) {
+            std.log.err("Unable to Create Shader Module", .{});
+            return error.ShaderModuleCreationFailed;
+        }
+        return shadermodule;
+    }
     fn creategraphicspipeline(self: *graphicalcontext) !void {
-        _ = self;
+        //cast a slice of u8 to slice of u32
+        const vertcodeslice = @as([*]const u32, @ptrCast(@alignCast(triangle_vert)))[0 .. triangle_vert.len / @sizeOf(u32)];
+        const fragcodeslice = @as([*]const u32, @ptrCast(@alignCast(triangle_frag)))[0 .. triangle_frag.len / @sizeOf(u32)];
+
+        const vertshadermodule = try createshadermodule(vertcodeslice, self);
+        const fragshadermodule = try createshadermodule(fragcodeslice, self);
+
+        vk.vkDestroyShaderModule(self.device, vertshadermodule, null);
+        vk.vkDestroyShaderModule(self.device, fragshadermodule, null);
     }
     fn createimageviews(self: *graphicalcontext) !void {
         self.swapchainimageviews = try self.allocator.alloc(vk.VkImageView, self.swapchainimages.len);

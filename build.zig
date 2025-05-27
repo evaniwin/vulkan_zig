@@ -46,7 +46,7 @@ pub fn build(b: *std.Build) !void {
                 b.fmt("shaders/{s}", .{file.?.name}),
                 "-V",
                 "-o",
-                b.fmt("shaders/{s}_{s}.spv", .{ nametoken.next().?, nametoken.next().? }),
+                b.fmt("src/spirv/{s}_{s}.spv", .{ nametoken.next().?, nametoken.next().? }),
             });
             compileshadersteps.dependOn(&compile_cmd.step);
         }
