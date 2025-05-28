@@ -22,6 +22,7 @@ pub const graphicalcontext = struct {
     swapchainimageviews: []vk.VkImageView,
     renderpass: vk.VkRenderPass,
     pipelinelayout: vk.VkPipelineLayout,
+    graphicspipeline: vk.VkPipeline,
     instanceextensions: *helper.extensionarray,
     pub fn init(allocator: std.mem.Allocator, window: *vk.GLFWwindow) !*graphicalcontext {
         //allocate an instance of this struct
@@ -48,6 +49,7 @@ pub const graphicalcontext = struct {
     }
     pub fn deinit(self: *graphicalcontext) void {
         self.instanceextensions.free();
+        vk.vkDestroyPipeline(self.device, self.graphicspipeline, null);
         vk.vkDestroyPipelineLayout(self.device, self.pipelinelayout, null);
         vk.vkDestroyRenderPass(self.device, self.renderpass, null);
         destroyimageviews(self);
@@ -122,7 +124,7 @@ pub const graphicalcontext = struct {
         fragshadercreateinfo.sType = vk.VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
         fragshadercreateinfo.stage = vk.VK_SHADER_STAGE_FRAGMENT_BIT;
         fragshadercreateinfo.module = fragshadermodule;
-        fragshadercreateinfo.pName = "name";
+        fragshadercreateinfo.pName = "main";
 
         var shaderstages: [2]vk.VkPipelineShaderStageCreateInfo = .{ vertshadercreateinfo, fragshadercreateinfo };
         _ = &shaderstages;
@@ -199,6 +201,17 @@ pub const graphicalcontext = struct {
         colorblendattachment.dstAlphaBlendFactor = vk.VK_BLEND_FACTOR_ZERO;
         colorblendattachment.alphaBlendOp = vk.VK_BLEND_OP_ADD;
 
+        var colourblendcreateinfo: vk.VkPipelineColorBlendStateCreateInfo = .{};
+        colourblendcreateinfo.sType = vk.VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+        colourblendcreateinfo.logicOpEnable = vk.VK_FALSE;
+        colourblendcreateinfo.logicOp = vk.VK_LOGIC_OP_COPY;
+        colourblendcreateinfo.attachmentCount = 1;
+        colourblendcreateinfo.pAttachments = &colorblendattachment;
+        colourblendcreateinfo.blendConstants[0] = 0;
+        colourblendcreateinfo.blendConstants[1] = 0;
+        colourblendcreateinfo.blendConstants[2] = 0;
+        colourblendcreateinfo.blendConstants[3] = 0;
+
         var pipelinelayoutcreateinfo: vk.VkPipelineLayoutCreateInfo = .{};
         pipelinelayoutcreateinfo.sType = vk.VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
         pipelinelayoutcreateinfo.setLayoutCount = 0;
@@ -207,6 +220,29 @@ pub const graphicalcontext = struct {
         pipelinelayoutcreateinfo.pPushConstantRanges = null;
 
         if (vk.vkCreatePipelineLayout(self.device, &pipelinelayoutcreateinfo, null, &self.pipelinelayout) != vk.VK_SUCCESS) {
+            std.log.err("Unable to Create Pipeline Layout", .{});
+            return error.PipelineCreationFailedLayout;
+        }
+
+        var graphicspipelinecreateinfo: vk.VkGraphicsPipelineCreateInfo = .{};
+        graphicspipelinecreateinfo.sType = vk.VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+        graphicspipelinecreateinfo.stageCount = shaderstages.len;
+        graphicspipelinecreateinfo.pStages = &shaderstages[0];
+        graphicspipelinecreateinfo.pVertexInputState = &vertexinputinfo;
+        graphicspipelinecreateinfo.pInputAssemblyState = &inputassembly;
+        graphicspipelinecreateinfo.pViewportState = &viewportstatecreateinfo;
+        graphicspipelinecreateinfo.pRasterizationState = &rasterizer;
+        graphicspipelinecreateinfo.pMultisampleState = &multisampling;
+        graphicspipelinecreateinfo.pDepthStencilState = null;
+        graphicspipelinecreateinfo.pColorBlendState = &colourblendcreateinfo;
+        graphicspipelinecreateinfo.pDynamicState = &dynamicstatecreateinfo;
+        graphicspipelinecreateinfo.layout = self.pipelinelayout;
+        graphicspipelinecreateinfo.renderPass = self.renderpass;
+        graphicspipelinecreateinfo.subpass = 0;
+        graphicspipelinecreateinfo.basePipelineHandle = null;
+        graphicspipelinecreateinfo.basePipelineIndex = -1;
+
+        if (vk.vkCreateGraphicsPipelines(self.device, null, 1, &graphicspipelinecreateinfo, null, &self.graphicspipeline) != vk.VK_SUCCESS) {
             std.log.err("Unable to Create Pipeline", .{});
             return error.PipelineCreationFailed;
         }
