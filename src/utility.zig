@@ -23,6 +23,7 @@ pub const graphicalcontext = struct {
     renderpass: vk.VkRenderPass,
     pipelinelayout: vk.VkPipelineLayout,
     graphicspipeline: vk.VkPipeline,
+    swapchainframebuffers: []vk.VkFramebuffer,
     instanceextensions: *helper.extensionarray,
     pub fn init(allocator: std.mem.Allocator, window: *vk.GLFWwindow) !*graphicalcontext {
         //allocate an instance of this struct
@@ -45,10 +46,12 @@ pub const graphicalcontext = struct {
         try createimageviews(self);
         try createrenderpass(self);
         try creategraphicspipeline(self);
+        try createframebuffers(self);
         return self;
     }
     pub fn deinit(self: *graphicalcontext) void {
         self.instanceextensions.free();
+        destroyframebuffers(self);
         vk.vkDestroyPipeline(self.device, self.graphicspipeline, null);
         vk.vkDestroyPipelineLayout(self.device, self.pipelinelayout, null);
         vk.vkDestroyRenderPass(self.device, self.renderpass, null);
@@ -60,6 +63,31 @@ pub const graphicalcontext = struct {
         vk.vkDestroyInstance(self.instance, null);
         self.queuelist.deinit();
         self.allocator.destroy(self);
+    }
+    fn destroyframebuffers(self: *graphicalcontext) void {
+        for (0..self.swapchainframebuffers.len) |i| {
+            vk.vkDestroyFramebuffer(self.device, self.swapchainframebuffers[i], null);
+        }
+        self.allocator.free(self.swapchainframebuffers);
+    }
+    fn createframebuffers(self: *graphicalcontext) !void {
+        self.swapchainframebuffers = try self.allocator.alloc(vk.VkFramebuffer, self.swapchainimageviews.len);
+
+        for (0..self.swapchainimageviews.len) |i| {
+            var attachments: [1]vk.VkImageView = .{self.swapchainimageviews[i]};
+            var framebuffercreateinfo: vk.VkFramebufferCreateInfo = .{};
+            framebuffercreateinfo.sType = vk.VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+            framebuffercreateinfo.renderPass = self.renderpass;
+            framebuffercreateinfo.attachmentCount = 1;
+            framebuffercreateinfo.pAttachments = &attachments[0];
+            framebuffercreateinfo.width = self.swapchainextent.width;
+            framebuffercreateinfo.height = self.swapchainextent.height;
+            framebuffercreateinfo.layers = 1;
+            if (vk.vkCreateFramebuffer(self.device, &framebuffercreateinfo, null, &self.swapchainframebuffers[i]) != vk.VK_SUCCESS) {
+                std.log.err("Failed To create frame buffer", .{});
+                return error.FrameBufferCreationFailed;
+            }
+        }
     }
     fn createrenderpass(self: *graphicalcontext) !void {
         var colorattachment: vk.VkAttachmentDescription = .{};

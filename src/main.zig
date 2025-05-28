@@ -16,11 +16,7 @@ fn render() void {
         return;
     };
 }
-test "align" {
-    const num: [8:0]u8 = "hellowor";
-    const casted: [*c]const u32 = @ptrCast(@alignCast(num));
-    _ = casted;
-}
+
 pub var viewportsize: [2]c_int = .{ 400, 400 };
 pub var running = true;
 const graphics = @import("graphics.zig");
