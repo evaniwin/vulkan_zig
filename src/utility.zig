@@ -20,6 +20,7 @@ pub const graphicalcontext = struct {
     swapchainimageformat: vk.VkFormat,
     swapchainextent: vk.VkExtent2D,
     swapchainimageviews: []vk.VkImageView,
+    renderpass: vk.VkRenderPass,
     pipelinelayout: vk.VkPipelineLayout,
     instanceextensions: *helper.extensionarray,
     pub fn init(allocator: std.mem.Allocator, window: *vk.GLFWwindow) !*graphicalcontext {
@@ -41,12 +42,14 @@ pub const graphicalcontext = struct {
         try createlogicaldevice(self);
         try createswapchain(self);
         try createimageviews(self);
+        try createrenderpass(self);
         try creategraphicspipeline(self);
         return self;
     }
     pub fn deinit(self: *graphicalcontext) void {
         self.instanceextensions.free();
         vk.vkDestroyPipelineLayout(self.device, self.pipelinelayout, null);
+        vk.vkDestroyRenderPass(self.device, self.renderpass, null);
         destroyimageviews(self);
         freeswapchain(self);
         destroylogicaldevice(self);
@@ -55,6 +58,38 @@ pub const graphicalcontext = struct {
         vk.vkDestroyInstance(self.instance, null);
         self.queuelist.deinit();
         self.allocator.destroy(self);
+    }
+    fn createrenderpass(self: *graphicalcontext) !void {
+        var colorattachment: vk.VkAttachmentDescription = .{};
+        colorattachment.format = self.swapchainimageformat;
+        colorattachment.samples = vk.VK_SAMPLE_COUNT_1_BIT;
+        colorattachment.loadOp = vk.VK_ATTACHMENT_LOAD_OP_CLEAR;
+        colorattachment.storeOp = vk.VK_ATTACHMENT_STORE_OP_STORE;
+        colorattachment.stencilLoadOp = vk.VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        colorattachment.stencilStoreOp = vk.VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        colorattachment.initialLayout = vk.VK_IMAGE_LAYOUT_UNDEFINED;
+        colorattachment.finalLayout = vk.VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+
+        var colorattachmentrefrence: vk.VkAttachmentReference = .{};
+        colorattachmentrefrence.attachment = 0;
+        colorattachmentrefrence.layout = vk.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
+        var subpass: vk.VkSubpassDescription = .{};
+        subpass.pipelineBindPoint = vk.VK_PIPELINE_BIND_POINT_GRAPHICS;
+        subpass.colorAttachmentCount = 1;
+        subpass.pColorAttachments = &colorattachmentrefrence;
+
+        var renderpasscreateinfo: vk.VkRenderPassCreateInfo = .{};
+        renderpasscreateinfo.sType = vk.VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+        renderpasscreateinfo.attachmentCount = 1;
+        renderpasscreateinfo.pAttachments = &colorattachment;
+        renderpasscreateinfo.subpassCount = 1;
+        renderpasscreateinfo.pSubpasses = &subpass;
+
+        if (vk.vkCreateRenderPass(self.device, &renderpasscreateinfo, null, &self.renderpass) != vk.VK_SUCCESS) {
+            std.log.err("Unable To create Render Pass", .{});
+            return error.UnableToCreateRenderPass;
+        }
     }
     fn createshadermodule(code: []const u32, self: *graphicalcontext) !vk.VkShaderModule {
         var createinfo: vk.VkShaderModuleCreateInfo = .{};
