@@ -20,6 +20,7 @@ pub const graphicalcontext = struct {
     swapchainimageformat: vk.VkFormat,
     swapchainextent: vk.VkExtent2D,
     swapchainimageviews: []vk.VkImageView,
+    pipelinelayout: vk.VkPipelineLayout,
     instanceextensions: *helper.extensionarray,
     pub fn init(allocator: std.mem.Allocator, window: *vk.GLFWwindow) !*graphicalcontext {
         //allocate an instance of this struct
@@ -45,6 +46,7 @@ pub const graphicalcontext = struct {
     }
     pub fn deinit(self: *graphicalcontext) void {
         self.instanceextensions.free();
+        vk.vkDestroyPipelineLayout(self.device, self.pipelinelayout, null);
         destroyimageviews(self);
         freeswapchain(self);
         destroylogicaldevice(self);
@@ -74,6 +76,105 @@ pub const graphicalcontext = struct {
 
         const vertshadermodule = try createshadermodule(vertcodeslice, self);
         const fragshadermodule = try createshadermodule(fragcodeslice, self);
+
+        var vertshadercreateinfo: vk.VkPipelineShaderStageCreateInfo = .{};
+        vertshadercreateinfo.sType = vk.VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        vertshadercreateinfo.stage = vk.VK_SHADER_STAGE_VERTEX_BIT;
+        vertshadercreateinfo.module = vertshadermodule;
+        vertshadercreateinfo.pName = "main";
+
+        var fragshadercreateinfo: vk.VkPipelineShaderStageCreateInfo = .{};
+        fragshadercreateinfo.sType = vk.VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        fragshadercreateinfo.stage = vk.VK_SHADER_STAGE_FRAGMENT_BIT;
+        fragshadercreateinfo.module = fragshadermodule;
+        fragshadercreateinfo.pName = "name";
+
+        var shaderstages: [2]vk.VkPipelineShaderStageCreateInfo = .{ vertshadercreateinfo, fragshadercreateinfo };
+        _ = &shaderstages;
+
+        var dynamicstates: [2]vk.VkDynamicState = .{ vk.VK_DYNAMIC_STATE_VIEWPORT, vk.VK_DYNAMIC_STATE_SCISSOR };
+        var dynamicstatecreateinfo: vk.VkPipelineDynamicStateCreateInfo = .{};
+        dynamicstatecreateinfo.sType = vk.VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+        dynamicstatecreateinfo.dynamicStateCount = dynamicstates.len;
+        dynamicstatecreateinfo.pDynamicStates = &dynamicstates[0];
+
+        //this structure describes the format of the vertex data that will be passed to the vertex shader
+        var vertexinputinfo: vk.VkPipelineVertexInputStateCreateInfo = .{};
+        vertexinputinfo.sType = vk.VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+        vertexinputinfo.vertexBindingDescriptionCount = 0;
+        vertexinputinfo.pVertexBindingDescriptions = null;
+        vertexinputinfo.vertexAttributeDescriptionCount = 0;
+        vertexinputinfo.pVertexAttributeDescriptions = null;
+
+        var inputassembly: vk.VkPipelineInputAssemblyStateCreateInfo = .{};
+        inputassembly.sType = vk.VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+        inputassembly.topology = vk.VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+        inputassembly.primitiveRestartEnable = vk.VK_FALSE;
+
+        var viewport: vk.VkViewport = .{};
+        viewport.x = 0;
+        viewport.y = 0;
+        viewport.width = @floatFromInt(self.swapchainextent.width);
+        viewport.height = @floatFromInt(self.swapchainextent.height);
+        viewport.minDepth = 0;
+        viewport.maxDepth = 1;
+
+        var scissor: vk.VkRect2D = .{};
+        scissor.offset = .{ .x = 0, .y = 1 };
+        scissor.extent = self.swapchainextent;
+
+        var viewportstatecreateinfo: vk.VkPipelineViewportStateCreateInfo = .{};
+        viewportstatecreateinfo.sType = vk.VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+        viewportstatecreateinfo.viewportCount = 1;
+        viewportstatecreateinfo.pViewports = &viewport;
+        viewportstatecreateinfo.scissorCount = 1;
+        viewportstatecreateinfo.pScissors = &scissor;
+
+        var rasterizer: vk.VkPipelineRasterizationStateCreateInfo = .{};
+        rasterizer.sType = vk.VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+        rasterizer.depthBiasEnable = vk.VK_FALSE;
+        rasterizer.rasterizerDiscardEnable = vk.VK_FALSE;
+        rasterizer.polygonMode = vk.VK_POLYGON_MODE_FILL;
+        rasterizer.lineWidth = 1;
+        rasterizer.cullMode = vk.VK_CULL_MODE_BACK_BIT;
+        rasterizer.frontFace = vk.VK_FRONT_FACE_CLOCKWISE;
+        rasterizer.depthBiasEnable = vk.VK_FALSE;
+        rasterizer.depthBiasConstantFactor = 0;
+        rasterizer.depthBiasClamp = 0;
+        rasterizer.depthBiasSlopeFactor = 0;
+
+        var multisampling: vk.VkPipelineMultisampleStateCreateInfo = .{};
+        multisampling.sType = vk.VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+        multisampling.sampleShadingEnable = vk.VK_FALSE;
+        multisampling.rasterizationSamples = vk.VK_SAMPLE_COUNT_1_BIT;
+        multisampling.minSampleShading = 1;
+        multisampling.pSampleMask = null;
+        multisampling.alphaToCoverageEnable = vk.VK_FALSE;
+        multisampling.alphaToOneEnable = vk.VK_FALSE;
+
+        //placeholder for depth and stencil tests
+
+        var colorblendattachment: vk.VkPipelineColorBlendAttachmentState = .{};
+        colorblendattachment.colorWriteMask = vk.VK_COLOR_COMPONENT_R_BIT | vk.VK_COLOR_COMPONENT_G_BIT | vk.VK_COLOR_COMPONENT_B_BIT | vk.VK_COLOR_COMPONENT_A_BIT;
+        colorblendattachment.blendEnable = vk.VK_FALSE;
+        colorblendattachment.srcColorBlendFactor = vk.VK_BLEND_FACTOR_ONE;
+        colorblendattachment.dstColorBlendFactor = vk.VK_BLEND_FACTOR_ZERO;
+        colorblendattachment.colorBlendOp = vk.VK_BLEND_OP_ADD;
+        colorblendattachment.srcAlphaBlendFactor = vk.VK_BLEND_FACTOR_ONE;
+        colorblendattachment.dstAlphaBlendFactor = vk.VK_BLEND_FACTOR_ZERO;
+        colorblendattachment.alphaBlendOp = vk.VK_BLEND_OP_ADD;
+
+        var pipelinelayoutcreateinfo: vk.VkPipelineLayoutCreateInfo = .{};
+        pipelinelayoutcreateinfo.sType = vk.VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+        pipelinelayoutcreateinfo.setLayoutCount = 0;
+        pipelinelayoutcreateinfo.pSetLayouts = null;
+        pipelinelayoutcreateinfo.pushConstantRangeCount = 0;
+        pipelinelayoutcreateinfo.pPushConstantRanges = null;
+
+        if (vk.vkCreatePipelineLayout(self.device, &pipelinelayoutcreateinfo, null, &self.pipelinelayout) != vk.VK_SUCCESS) {
+            std.log.err("Unable to Create Pipeline", .{});
+            return error.PipelineCreationFailed;
+        }
 
         vk.vkDestroyShaderModule(self.device, vertshadermodule, null);
         vk.vkDestroyShaderModule(self.device, fragshadermodule, null);
