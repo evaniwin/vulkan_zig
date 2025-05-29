@@ -24,6 +24,8 @@ pub const graphicalcontext = struct {
     pipelinelayout: vk.VkPipelineLayout,
     graphicspipeline: vk.VkPipeline,
     swapchainframebuffers: []vk.VkFramebuffer,
+    commandpool: vk.VkCommandPool,
+    commandbuffer: vk.VkCommandBuffer,
     instanceextensions: *helper.extensionarray,
     pub fn init(allocator: std.mem.Allocator, window: *vk.GLFWwindow) !*graphicalcontext {
         //allocate an instance of this struct
@@ -47,10 +49,13 @@ pub const graphicalcontext = struct {
         try createrenderpass(self);
         try creategraphicspipeline(self);
         try createframebuffers(self);
+        try createcommandpool(self);
+        try createcommandbuffer(self);
         return self;
     }
     pub fn deinit(self: *graphicalcontext) void {
         self.instanceextensions.free();
+        vk.vkDestroyCommandPool(self.device, self.commandpool, null);
         destroyframebuffers(self);
         vk.vkDestroyPipeline(self.device, self.graphicspipeline, null);
         vk.vkDestroyPipelineLayout(self.device, self.pipelinelayout, null);
@@ -63,6 +68,75 @@ pub const graphicalcontext = struct {
         vk.vkDestroyInstance(self.instance, null);
         self.queuelist.deinit();
         self.allocator.destroy(self);
+    }
+    pub fn recordcommandbuffer(self: *graphicalcontext, commandbuffer: vk.VkCommandBuffer, imageindex: u32) !void {
+        var commandbufferbegininfo: vk.VkCommandBufferBeginInfo = .{};
+        commandbufferbegininfo.sType = vk.VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        commandbufferbegininfo.flags = 0;
+        commandbufferbegininfo.pInheritanceInfo = null;
+        if (vk.vkBeginCommandBuffer(commandbuffer, &commandbufferbegininfo) != vk.VK_SUCCESS) {
+            std.log.err("Unable to Begin Recording Commandbufffer", .{});
+            return error.FailedToBeginRecordingCommandBuffer;
+        }
+
+        var renderpassbegininfo: vk.VkRenderPassBeginInfo = .{};
+        renderpassbegininfo.sType = vk.VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+        renderpassbegininfo.renderPass = self.renderpass;
+        renderpassbegininfo.framebuffer = self.swapchainframebuffers[imageindex];
+        renderpassbegininfo.renderArea.offset = .{ .x = 0, .y = 0 };
+        renderpassbegininfo.renderArea.extent = self.swapchainextent;
+        var clearcolor: vk.VkClearValue = .{ .color = .{ 0, 0, 0, 0 } };
+        renderpassbegininfo.clearValueCount = 1;
+        renderpassbegininfo.pClearValues = &clearcolor;
+
+        vk.vkCmdBeginRenderPass(commandbuffer, &renderpassbegininfo, vk.VK_SUBPASS_CONTENTS_INLINE);
+
+        vk.vkCmdBindPipeline(commandbuffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.graphicspipeline);
+
+        var viewport: vk.VkViewport = .{};
+        viewport.x = 0;
+        viewport.y = 0;
+        viewport.height = @floatFromInt(self.swapchainextent.height);
+        viewport.width = @floatFromInt(self.swapchainextent.width);
+        viewport.minDepth = 0;
+        viewport.maxDepth = 1;
+        vk.vkCmdSetViewport(commandbuffer, 0, 1, &viewport);
+
+        var scissor: vk.VkRect2D = .{};
+        scissor.offset = .{ .x = 0, .y = 0 };
+        scissor.extent = self.swapchainextent;
+        vk.vkCmdSetScissor(commandbuffer, 0, 1, &scissor);
+
+        vk.vkCmdDraw(commandbuffer, 3, 1, 0, 0);
+
+        vk.vkCmdEndRenderPass(commandbuffer);
+
+        if (vk.vkEndCommandBuffer(commandbuffer) != vk.VK_SUCCESS) {
+            std.log.err("Unable to End Recording Commandbufffer", .{});
+            return error.FailedToEndRecordingCommandBuffer;
+        }
+    }
+    fn createcommandbuffer(self: *graphicalcontext) !void {
+        var allocinfo: vk.VkCommandBufferAllocateInfo = .{};
+        allocinfo.sType = vk.VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+        allocinfo.commandPool = self.commandpool;
+        allocinfo.level = vk.VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        allocinfo.commandBufferCount = 1;
+        if (vk.vkAllocateCommandBuffers(self.device, &allocinfo, &self.commandbuffer) != vk.VK_SUCCESS) {
+            std.log.err("Unable to create Command buffer", .{});
+            return error.CommandBufferAllocationFailed;
+        }
+    }
+    fn createcommandpool(self: *graphicalcontext) !void {
+        var commandpoolcreateinfo: vk.VkCommandPoolCreateInfo = .{};
+        commandpoolcreateinfo.sType = vk.VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+        commandpoolcreateinfo.flags = vk.VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+        commandpoolcreateinfo.queueFamilyIndex = self.graphicsqueue.familyindex;
+
+        if (vk.vkCreateCommandPool(self.device, &commandpoolcreateinfo, null, &self.commandpool) != vk.VK_SUCCESS) {
+            std.log.err("Unable to create Command Pool", .{});
+            return error.CommandPoolCreationFailed;
+        }
     }
     fn destroyframebuffers(self: *graphicalcontext) void {
         for (0..self.swapchainframebuffers.len) |i| {
