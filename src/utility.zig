@@ -27,6 +27,9 @@ pub const graphicalcontext = struct {
     commandpool: vk.VkCommandPool,
     commandbuffer: vk.VkCommandBuffer,
     instanceextensions: *helper.extensionarray,
+    imageavailablesephamore: []vk.VkSemaphore,
+    renderfinishedsephamore: []vk.VkSemaphore,
+    inflightfence: []vk.VkFence,
     pub fn init(allocator: std.mem.Allocator, window: *vk.GLFWwindow) !*graphicalcontext {
         //allocate an instance of this struct
         const self: *graphicalcontext = allocator.create(graphicalcontext) catch |err| {
@@ -51,10 +54,12 @@ pub const graphicalcontext = struct {
         try createframebuffers(self);
         try createcommandpool(self);
         try createcommandbuffer(self);
+        try createsyncobjects(self);
         return self;
     }
     pub fn deinit(self: *graphicalcontext) void {
         self.instanceextensions.free();
+        destroysyncobjects(self);
         vk.vkDestroyCommandPool(self.device, self.commandpool, null);
         destroyframebuffers(self);
         vk.vkDestroyPipeline(self.device, self.graphicspipeline, null);
@@ -68,6 +73,41 @@ pub const graphicalcontext = struct {
         vk.vkDestroyInstance(self.instance, null);
         self.queuelist.deinit();
         self.allocator.destroy(self);
+    }
+    fn destroysyncobjects(self: *graphicalcontext) void {
+        for (0..self.swapchainimages.len) |i| {
+            vk.vkDestroySemaphore(self.device, self.imageavailablesephamore[i], null);
+            vk.vkDestroySemaphore(self.device, self.renderfinishedsephamore[i], null);
+            vk.vkDestroyFence(self.device, self.inflightfence[i], null);
+        }
+        self.allocator.free(self.imageavailablesephamore);
+        self.allocator.free(self.renderfinishedsephamore);
+        self.allocator.free(self.inflightfence);
+    }
+    fn createsyncobjects(self: *graphicalcontext) !void {
+        var sephamorecreateinfo: vk.VkSemaphoreCreateInfo = .{};
+        sephamorecreateinfo.sType = vk.VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+
+        var fencecreateinfo: vk.VkFenceCreateInfo = .{};
+        fencecreateinfo.sType = vk.VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+        fencecreateinfo.flags = vk.VK_FENCE_CREATE_SIGNALED_BIT;
+        self.imageavailablesephamore = try self.allocator.alloc(vk.VkSemaphore, self.swapchainimages.len);
+        self.renderfinishedsephamore = try self.allocator.alloc(vk.VkSemaphore, self.swapchainimages.len);
+        self.inflightfence = try self.allocator.alloc(vk.VkFence, self.swapchainimages.len);
+        for (0..self.swapchainimages.len) |i| {
+            if (vk.vkCreateSemaphore(self.device, &sephamorecreateinfo, null, &self.imageavailablesephamore[i]) != vk.VK_SUCCESS) {
+                std.log.err("Unable to Create Gpu Semaphore", .{});
+                return error.UnableToCreateSemaphore;
+            }
+            if (vk.vkCreateSemaphore(self.device, &sephamorecreateinfo, null, &self.renderfinishedsephamore[i]) != vk.VK_SUCCESS) {
+                std.log.err("Unable to Create Gpu Semaphore", .{});
+                return error.UnableToCreateSemaphore;
+            }
+            if (vk.vkCreateFence(self.device, &fencecreateinfo, null, &self.inflightfence[i]) != vk.VK_SUCCESS) {
+                std.log.err("Unable to Create Cpu fence", .{});
+                return error.UnableToCreateFence;
+            }
+        }
     }
     pub fn recordcommandbuffer(self: *graphicalcontext, commandbuffer: vk.VkCommandBuffer, imageindex: u32) !void {
         var commandbufferbegininfo: vk.VkCommandBufferBeginInfo = .{};
@@ -85,7 +125,7 @@ pub const graphicalcontext = struct {
         renderpassbegininfo.framebuffer = self.swapchainframebuffers[imageindex];
         renderpassbegininfo.renderArea.offset = .{ .x = 0, .y = 0 };
         renderpassbegininfo.renderArea.extent = self.swapchainextent;
-        var clearcolor: vk.VkClearValue = .{ .color = .{ 0, 0, 0, 0 } };
+        var clearcolor: vk.VkClearValue = .{ .color = vk.VkClearColorValue{ .int32 = .{ 0, 0, 0, 0 } } };
         renderpassbegininfo.clearValueCount = 1;
         renderpassbegininfo.pClearValues = &clearcolor;
 
@@ -183,12 +223,22 @@ pub const graphicalcontext = struct {
         subpass.colorAttachmentCount = 1;
         subpass.pColorAttachments = &colorattachmentrefrence;
 
+        var subpassdependency: vk.VkSubpassDependency = .{};
+        subpassdependency.srcSubpass = vk.VK_SUBPASS_EXTERNAL;
+        subpassdependency.dstSubpass = 0;
+        subpassdependency.srcStageMask = vk.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        subpassdependency.srcAccessMask = 0;
+        subpassdependency.dstStageMask = vk.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        subpassdependency.dstAccessMask = vk.VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+
         var renderpasscreateinfo: vk.VkRenderPassCreateInfo = .{};
         renderpasscreateinfo.sType = vk.VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
         renderpasscreateinfo.attachmentCount = 1;
         renderpasscreateinfo.pAttachments = &colorattachment;
         renderpasscreateinfo.subpassCount = 1;
         renderpasscreateinfo.pSubpasses = &subpass;
+        renderpasscreateinfo.dependencyCount = 1;
+        renderpasscreateinfo.pDependencies = &subpassdependency;
 
         if (vk.vkCreateRenderPass(self.device, &renderpasscreateinfo, null, &self.renderpass) != vk.VK_SUCCESS) {
             std.log.err("Unable To create Render Pass", .{});

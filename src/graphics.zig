@@ -87,16 +87,68 @@ pub fn draw() !void {
         std.log.err("Unable instance creation failed: {s}", .{@errorName(err)});
         return;
     };
-    vkinstance.deinit();
+    defer vkinstance.deinit();
     while (main.running) {
 
         //poll events
         vk.glfwPollEvents();
+        try drawframe(vkinstance);
         windowhandler(window);
         viewportsizeupdate(window);
     }
+    _ = vk.vkDeviceWaitIdle(vkinstance.device);
 }
 
+fn drawframe(vkinstance: *utilty.graphicalcontext) !void {
+    _ = vk.vkWaitForFences(vkinstance.device, 1, &vkinstance.inflightfence[0], vk.VK_TRUE, std.math.maxInt(u64));
+    _ = vk.vkResetFences(vkinstance.device, 1, &vkinstance.inflightfence[0]);
+
+    var imageindex: u32 = undefined;
+    _ = vk.vkAcquireNextImageKHR(
+        vkinstance.device,
+        vkinstance.swapchain,
+        std.math.maxInt(u64),
+        vkinstance.imageavailablesephamore[0],
+        null,
+        &imageindex,
+    );
+
+    _ = vk.vkResetCommandBuffer(vkinstance.commandbuffer, 0);
+    try vkinstance.recordcommandbuffer(vkinstance.commandbuffer, imageindex);
+
+    var submitinfo: vk.VkSubmitInfo = .{};
+    submitinfo.sType = vk.VK_STRUCTURE_TYPE_SUBMIT_INFO;
+
+    var waitsemaphores: [1]vk.VkSemaphore = .{vkinstance.imageavailablesephamore[0]};
+    var waitstages: [1]vk.VkPipelineStageFlags = .{vk.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT};
+    submitinfo.waitSemaphoreCount = 1;
+    submitinfo.pWaitSemaphores = &waitsemaphores[0];
+    submitinfo.pWaitDstStageMask = &waitstages[0];
+    submitinfo.commandBufferCount = 1;
+    submitinfo.pCommandBuffers = &vkinstance.commandbuffer;
+
+    var signalsemaphores: [1]vk.VkSemaphore = .{vkinstance.renderfinishedsephamore[0]};
+    submitinfo.signalSemaphoreCount = 1;
+    submitinfo.pSignalSemaphores = &signalsemaphores[0];
+
+    if (vk.vkQueueSubmit(vkinstance.graphicsqueue.queue, 1, &submitinfo, vkinstance.inflightfence[0]) != vk.VK_SUCCESS) {
+        std.log.err("Unable to Submit Queue", .{});
+        return error.QueueSubmissionFailed;
+    }
+
+    var presentinfo: vk.VkPresentInfoKHR = .{};
+    presentinfo.sType = vk.VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
+    presentinfo.waitSemaphoreCount = 1;
+    presentinfo.pWaitSemaphores = &signalsemaphores[0];
+
+    var swapchains: [1]vk.VkSwapchainKHR = .{vkinstance.swapchain};
+    presentinfo.swapchainCount = 1;
+    presentinfo.pSwapchains = &swapchains[0];
+    presentinfo.pImageIndices = &imageindex;
+    presentinfo.pResults = null;
+
+    _ = vk.vkQueuePresentKHR(vkinstance.presentqueue.queue, &presentinfo);
+}
 const freetype = @cImport({
     @cInclude("freetype2/freetype/freetype.h");
     @cInclude("freetype2/ft2build.h");
