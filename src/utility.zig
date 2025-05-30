@@ -25,7 +25,7 @@ pub const graphicalcontext = struct {
     graphicspipeline: vk.VkPipeline,
     swapchainframebuffers: []vk.VkFramebuffer,
     commandpool: vk.VkCommandPool,
-    commandbuffer: vk.VkCommandBuffer,
+    commandbuffer: []vk.VkCommandBuffer,
     instanceextensions: *helper.extensionarray,
     imageavailablesephamore: []vk.VkSemaphore,
     renderfinishedsephamore: []vk.VkSemaphore,
@@ -71,6 +71,7 @@ pub const graphicalcontext = struct {
         destroydebugmessanger(self);
         vk.vkDestroySurfaceKHR(self.instance, self.surface, null);
         vk.vkDestroyInstance(self.instance, null);
+        self.allocator.free(self.commandbuffer);
         self.queuelist.deinit();
         self.allocator.destroy(self);
     }
@@ -157,14 +158,17 @@ pub const graphicalcontext = struct {
         }
     }
     fn createcommandbuffer(self: *graphicalcontext) !void {
+        self.commandbuffer = try self.allocator.alloc(vk.VkCommandBuffer, self.swapchainimages.len);
         var allocinfo: vk.VkCommandBufferAllocateInfo = .{};
         allocinfo.sType = vk.VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
         allocinfo.commandPool = self.commandpool;
         allocinfo.level = vk.VK_COMMAND_BUFFER_LEVEL_PRIMARY;
         allocinfo.commandBufferCount = 1;
-        if (vk.vkAllocateCommandBuffers(self.device, &allocinfo, &self.commandbuffer) != vk.VK_SUCCESS) {
-            std.log.err("Unable to create Command buffer", .{});
-            return error.CommandBufferAllocationFailed;
+        for (0..self.swapchainimages.len) |i| {
+            if (vk.vkAllocateCommandBuffers(self.device, &allocinfo, &self.commandbuffer[i]) != vk.VK_SUCCESS) {
+                std.log.err("Unable to create Command buffer", .{});
+                return error.CommandBufferAllocationFailed;
+            }
         }
     }
     fn createcommandpool(self: *graphicalcontext) !void {

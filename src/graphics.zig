@@ -98,40 +98,40 @@ pub fn draw() !void {
     }
     _ = vk.vkDeviceWaitIdle(vkinstance.device);
 }
-
+var currentframe: usize = 0;
 fn drawframe(vkinstance: *utilty.graphicalcontext) !void {
-    _ = vk.vkWaitForFences(vkinstance.device, 1, &vkinstance.inflightfence[0], vk.VK_TRUE, std.math.maxInt(u64));
-    _ = vk.vkResetFences(vkinstance.device, 1, &vkinstance.inflightfence[0]);
+    _ = vk.vkWaitForFences(vkinstance.device, 1, &vkinstance.inflightfence[currentframe], vk.VK_TRUE, std.math.maxInt(u64));
+    _ = vk.vkResetFences(vkinstance.device, 1, &vkinstance.inflightfence[currentframe]);
 
     var imageindex: u32 = undefined;
     _ = vk.vkAcquireNextImageKHR(
         vkinstance.device,
         vkinstance.swapchain,
         std.math.maxInt(u64),
-        vkinstance.imageavailablesephamore[0],
+        vkinstance.imageavailablesephamore[currentframe],
         null,
         &imageindex,
     );
 
-    _ = vk.vkResetCommandBuffer(vkinstance.commandbuffer, 0);
-    try vkinstance.recordcommandbuffer(vkinstance.commandbuffer, imageindex);
+    _ = vk.vkResetCommandBuffer(vkinstance.commandbuffer[currentframe], 0);
+    try vkinstance.recordcommandbuffer(vkinstance.commandbuffer[currentframe], imageindex);
 
     var submitinfo: vk.VkSubmitInfo = .{};
     submitinfo.sType = vk.VK_STRUCTURE_TYPE_SUBMIT_INFO;
 
-    var waitsemaphores: [1]vk.VkSemaphore = .{vkinstance.imageavailablesephamore[0]};
+    var waitsemaphores: [1]vk.VkSemaphore = .{vkinstance.imageavailablesephamore[currentframe]};
     var waitstages: [1]vk.VkPipelineStageFlags = .{vk.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT};
     submitinfo.waitSemaphoreCount = 1;
     submitinfo.pWaitSemaphores = &waitsemaphores[0];
     submitinfo.pWaitDstStageMask = &waitstages[0];
     submitinfo.commandBufferCount = 1;
-    submitinfo.pCommandBuffers = &vkinstance.commandbuffer;
+    submitinfo.pCommandBuffers = &vkinstance.commandbuffer[currentframe];
 
-    var signalsemaphores: [1]vk.VkSemaphore = .{vkinstance.renderfinishedsephamore[0]};
+    var signalsemaphores: [1]vk.VkSemaphore = .{vkinstance.renderfinishedsephamore[imageindex]};
     submitinfo.signalSemaphoreCount = 1;
     submitinfo.pSignalSemaphores = &signalsemaphores[0];
 
-    if (vk.vkQueueSubmit(vkinstance.graphicsqueue.queue, 1, &submitinfo, vkinstance.inflightfence[0]) != vk.VK_SUCCESS) {
+    if (vk.vkQueueSubmit(vkinstance.graphicsqueue.queue, 1, &submitinfo, vkinstance.inflightfence[currentframe]) != vk.VK_SUCCESS) {
         std.log.err("Unable to Submit Queue", .{});
         return error.QueueSubmissionFailed;
     }
@@ -148,6 +148,7 @@ fn drawframe(vkinstance: *utilty.graphicalcontext) !void {
     presentinfo.pResults = null;
 
     _ = vk.vkQueuePresentKHR(vkinstance.presentqueue.queue, &presentinfo);
+    currentframe = (currentframe + 1) % vkinstance.swapchainimages.len;
 }
 const freetype = @cImport({
     @cInclude("freetype2/freetype/freetype.h");
