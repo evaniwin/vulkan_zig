@@ -98,11 +98,12 @@ pub fn draw() !void {
     }
     _ = vk.vkDeviceWaitIdle(vkinstance.device);
 }
+const MAX_FRAMES_IN_FLIGHT: u32 = 2;
 var currentframe: usize = 0;
 fn drawframe(vkinstance: *utilty.graphicalcontext) !void {
     _ = vk.vkWaitForFences(vkinstance.device, 1, &vkinstance.inflightfence[currentframe], vk.VK_TRUE, std.math.maxInt(u64));
     _ = vk.vkResetFences(vkinstance.device, 1, &vkinstance.inflightfence[currentframe]);
-
+    //TODO The vkAcquireNextImageKHR does not use swapchain image 0 after first loop
     var imageindex: u32 = undefined;
     _ = vk.vkAcquireNextImageKHR(
         vkinstance.device,
@@ -148,7 +149,7 @@ fn drawframe(vkinstance: *utilty.graphicalcontext) !void {
     presentinfo.pResults = null;
 
     _ = vk.vkQueuePresentKHR(vkinstance.presentqueue.queue, &presentinfo);
-    currentframe = (currentframe + 1) % vkinstance.swapchainimages.len;
+    currentframe = (currentframe + 1) % @min(vkinstance.swapchainimages.len, MAX_FRAMES_IN_FLIGHT);
 }
 const freetype = @cImport({
     @cInclude("freetype2/freetype/freetype.h");
