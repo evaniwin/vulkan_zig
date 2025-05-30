@@ -34,12 +34,15 @@ fn mousebuttoncallback(_: ?*vk.GLFWwindow, button: c_int, action: c_int, mods: c
     }
 }
 
-fn cursorposcallback(_: ?*vk.GLFWwindow, xpos: f64, ypos: f64) callconv(.c) void {
-    std.debug.print("x:{d} y:{d}\n", .{ xpos, ypos });
+fn framebuffersizecallback(_: ?*vk.GLFWwindow, _: c_int, _: c_int) callconv(.c) void {
+    recreateswapchain = true;
 }
 
 fn errorcallback(err: c_int, decsription: [*c]const u8) callconv(.c) void {
     std.log.err("glfw error code{d}--{any}", .{ err, decsription });
+}
+fn cursorposcallback(_: ?*vk.GLFWwindow, xpos: f64, ypos: f64) callconv(.c) void {
+    std.debug.print("x:{d} y:{d}\n", .{ xpos, ypos });
 }
 fn windowhandler(window: ?*vk.GLFWwindow) void {
     if (vk.glfwWindowShouldClose(window) != 0) {
@@ -48,14 +51,16 @@ fn windowhandler(window: ?*vk.GLFWwindow) void {
     }
 }
 fn viewportsizeupdate(window: ?*vk.GLFWwindow, vkinstance: *utilty.graphicalcontext) void {
-    //opengl viewport update
-    var framebuffer: [2]c_int = undefined;
-    vk.glfwGetFramebufferSize(window, &framebuffer[0], &framebuffer[1]);
-    //do something
-    vkinstance.recreateswapchains() catch |err| {
-        std.log.err("Unable to recreate swapchain: {s}", .{@errorName(err)});
-        return;
-    };
+    _ = window;
+    //var framebuffer: [2]c_int = undefined;
+    //vk.glfwGetFramebufferSize(window, &framebuffer[0], &framebuffer[1]);
+    if (recreateswapchain) {
+        vkinstance.recreateswapchains() catch |err| {
+            std.log.err("Unable to recreate swapchain: {s}", .{@errorName(err)});
+            return;
+        };
+        recreateswapchain = false;
+    }
 }
 const app_name = "vulkan-zig triangle example";
 pub fn draw() !void {
@@ -86,7 +91,7 @@ pub fn draw() !void {
     _ = vk.glfwSetKeyCallback(window, keycallback);
     _ = vk.glfwSetCursorPosCallback(window, cursorposcallback);
     _ = vk.glfwSetMouseButtonCallback(window, mousebuttoncallback);
-
+    _ = vk.glfwSetFramebufferSizeCallback(window, framebuffersizecallback);
     const vkinstance = utilty.graphicalcontext.init(main.allocator, window) catch |err| {
         std.log.err("Unable instance creation failed: {s}", .{@errorName(err)});
         return;
@@ -102,6 +107,7 @@ pub fn draw() !void {
     }
     _ = vk.vkDeviceWaitIdle(vkinstance.device);
 }
+var recreateswapchain: bool = false;
 const MAX_FRAMES_IN_FLIGHT: u32 = 2;
 var currentframe: usize = 0;
 fn drawframe(vkinstance: *utilty.graphicalcontext) !void {
@@ -114,7 +120,7 @@ fn drawframe(vkinstance: *utilty.graphicalcontext) !void {
     );
     //TODO The vkAcquireNextImageKHR does not use swapchain image 0 after first loop
     var imageindex: u32 = undefined;
-    _ = vk.vkAcquireNextImageKHR(
+    var result = vk.vkAcquireNextImageKHR(
         vkinstance.device,
         vkinstance.swapchain,
         std.math.maxInt(u64),
@@ -122,6 +128,13 @@ fn drawframe(vkinstance: *utilty.graphicalcontext) !void {
         null,
         &imageindex,
     );
+    if (result == vk.VK_ERROR_OUT_OF_DATE_KHR) {
+        try vkinstance.recreateswapchains();
+        return;
+    } else if (result != vk.VK_SUCCESS and result != vk.VK_SUBOPTIMAL_KHR) {
+        std.log.err("unable to obtain swapchain image acquire", .{});
+        return;
+    }
     _ = vk.vkResetFences(vkinstance.device, 1, &vkinstance.inflightfences[currentframe]);
     _ = vk.vkResetCommandBuffer(vkinstance.commandbuffers[currentframe], 0);
     try vkinstance.recordcommandbuffer(vkinstance.commandbuffers[currentframe], imageindex);
@@ -157,7 +170,14 @@ fn drawframe(vkinstance: *utilty.graphicalcontext) !void {
     presentinfo.pImageIndices = &imageindex;
     presentinfo.pResults = null;
 
-    _ = vk.vkQueuePresentKHR(vkinstance.presentqueue.queue, &presentinfo);
+    result = vk.vkQueuePresentKHR(vkinstance.presentqueue.queue, &presentinfo);
+    if (result == vk.VK_ERROR_OUT_OF_DATE_KHR or result != vk.VK_SUBOPTIMAL_KHR) {
+        try vkinstance.recreateswapchains();
+        return;
+    } else if (result != vk.VK_SUCCESS or result != vk.VK_SUBOPTIMAL_KHR) {
+        std.log.err("unable to obtain swapchain image present", .{});
+        return;
+    }
     currentframe = (currentframe + 1) % @min(vkinstance.swapchainimages.len, MAX_FRAMES_IN_FLIGHT);
 }
 const freetype = @cImport({
