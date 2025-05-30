@@ -25,11 +25,11 @@ pub const graphicalcontext = struct {
     graphicspipeline: vk.VkPipeline,
     swapchainframebuffers: []vk.VkFramebuffer,
     commandpool: vk.VkCommandPool,
-    commandbuffer: []vk.VkCommandBuffer,
+    commandbuffers: []vk.VkCommandBuffer,
     instanceextensions: *helper.extensionarray,
-    imageavailablesephamore: []vk.VkSemaphore,
-    renderfinishedsephamore: []vk.VkSemaphore,
-    inflightfence: []vk.VkFence,
+    imageavailablesephamores: []vk.VkSemaphore,
+    renderfinishedsephamores: []vk.VkSemaphore,
+    inflightfences: []vk.VkFence,
     pub fn init(allocator: std.mem.Allocator, window: *vk.GLFWwindow) !*graphicalcontext {
         //allocate an instance of this struct
         const self: *graphicalcontext = allocator.create(graphicalcontext) catch |err| {
@@ -47,7 +47,8 @@ pub const graphicalcontext = struct {
         try pickphysicaldevice(self);
         self.queuelist = try graphicsqueue.getqueuefamily(self, self.physicaldevice);
         try createlogicaldevice(self);
-        try createswapchain(self);
+        try createswapchain(self, null);
+        try getswapchainImages(self);
         try createimageviews(self);
         try createrenderpass(self);
         try creategraphicspipeline(self);
@@ -66,24 +67,41 @@ pub const graphicalcontext = struct {
         vk.vkDestroyPipelineLayout(self.device, self.pipelinelayout, null);
         vk.vkDestroyRenderPass(self.device, self.renderpass, null);
         destroyimageviews(self);
-        freeswapchain(self);
+        destroyswapchainimages(self);
+        freeswapchain(self, self.swapchain);
         destroylogicaldevice(self);
         destroydebugmessanger(self);
         vk.vkDestroySurfaceKHR(self.instance, self.surface, null);
         vk.vkDestroyInstance(self.instance, null);
-        self.allocator.free(self.commandbuffer);
+        self.allocator.free(self.commandbuffers);
         self.queuelist.deinit();
         self.allocator.destroy(self);
     }
+    pub fn recreateswapchains(self: *graphicalcontext) !void {
+        const oldswapchain: vk.VkSwapchainKHR = self.swapchain;
+        const swapchainimageslen = self.swapchainimages.len;
+        try createswapchain(self, oldswapchain);
+        _ = vk.vkDeviceWaitIdle(self.device);
+        destroyswapchainimages(self);
+        destroyimageviews(self);
+        vk.vkDestroyRenderPass(self.device, self.renderpass, null);
+        destroyframebuffers(self);
+        freeswapchain(self, oldswapchain);
+        try getswapchainImages(self);
+        try createimageviews(self);
+        try createrenderpass(self);
+        try createframebuffers(self);
+        if (swapchainimageslen != self.swapchainimages.len) @panic("swap chain image length mismatch After Recreation");
+    }
     fn destroysyncobjects(self: *graphicalcontext) void {
         for (0..self.swapchainimages.len) |i| {
-            vk.vkDestroySemaphore(self.device, self.imageavailablesephamore[i], null);
-            vk.vkDestroySemaphore(self.device, self.renderfinishedsephamore[i], null);
-            vk.vkDestroyFence(self.device, self.inflightfence[i], null);
+            vk.vkDestroySemaphore(self.device, self.imageavailablesephamores[i], null);
+            vk.vkDestroySemaphore(self.device, self.renderfinishedsephamores[i], null);
+            vk.vkDestroyFence(self.device, self.inflightfences[i], null);
         }
-        self.allocator.free(self.imageavailablesephamore);
-        self.allocator.free(self.renderfinishedsephamore);
-        self.allocator.free(self.inflightfence);
+        self.allocator.free(self.imageavailablesephamores);
+        self.allocator.free(self.renderfinishedsephamores);
+        self.allocator.free(self.inflightfences);
     }
     fn createsyncobjects(self: *graphicalcontext) !void {
         var sephamorecreateinfo: vk.VkSemaphoreCreateInfo = .{};
@@ -92,19 +110,19 @@ pub const graphicalcontext = struct {
         var fencecreateinfo: vk.VkFenceCreateInfo = .{};
         fencecreateinfo.sType = vk.VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
         fencecreateinfo.flags = vk.VK_FENCE_CREATE_SIGNALED_BIT;
-        self.imageavailablesephamore = try self.allocator.alloc(vk.VkSemaphore, self.swapchainimages.len);
-        self.renderfinishedsephamore = try self.allocator.alloc(vk.VkSemaphore, self.swapchainimages.len);
-        self.inflightfence = try self.allocator.alloc(vk.VkFence, self.swapchainimages.len);
+        self.imageavailablesephamores = try self.allocator.alloc(vk.VkSemaphore, self.swapchainimages.len);
+        self.renderfinishedsephamores = try self.allocator.alloc(vk.VkSemaphore, self.swapchainimages.len);
+        self.inflightfences = try self.allocator.alloc(vk.VkFence, self.swapchainimages.len);
         for (0..self.swapchainimages.len) |i| {
-            if (vk.vkCreateSemaphore(self.device, &sephamorecreateinfo, null, &self.imageavailablesephamore[i]) != vk.VK_SUCCESS) {
+            if (vk.vkCreateSemaphore(self.device, &sephamorecreateinfo, null, &self.imageavailablesephamores[i]) != vk.VK_SUCCESS) {
                 std.log.err("Unable to Create Gpu Semaphore", .{});
                 return error.UnableToCreateSemaphore;
             }
-            if (vk.vkCreateSemaphore(self.device, &sephamorecreateinfo, null, &self.renderfinishedsephamore[i]) != vk.VK_SUCCESS) {
+            if (vk.vkCreateSemaphore(self.device, &sephamorecreateinfo, null, &self.renderfinishedsephamores[i]) != vk.VK_SUCCESS) {
                 std.log.err("Unable to Create Gpu Semaphore", .{});
                 return error.UnableToCreateSemaphore;
             }
-            if (vk.vkCreateFence(self.device, &fencecreateinfo, null, &self.inflightfence[i]) != vk.VK_SUCCESS) {
+            if (vk.vkCreateFence(self.device, &fencecreateinfo, null, &self.inflightfences[i]) != vk.VK_SUCCESS) {
                 std.log.err("Unable to Create Cpu fence", .{});
                 return error.UnableToCreateFence;
             }
@@ -158,14 +176,14 @@ pub const graphicalcontext = struct {
         }
     }
     fn createcommandbuffer(self: *graphicalcontext) !void {
-        self.commandbuffer = try self.allocator.alloc(vk.VkCommandBuffer, self.swapchainimages.len);
+        self.commandbuffers = try self.allocator.alloc(vk.VkCommandBuffer, self.swapchainimages.len);
         var allocinfo: vk.VkCommandBufferAllocateInfo = .{};
         allocinfo.sType = vk.VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
         allocinfo.commandPool = self.commandpool;
         allocinfo.level = vk.VK_COMMAND_BUFFER_LEVEL_PRIMARY;
         allocinfo.commandBufferCount = 1;
         for (0..self.swapchainimages.len) |i| {
-            if (vk.vkAllocateCommandBuffers(self.device, &allocinfo, &self.commandbuffer[i]) != vk.VK_SUCCESS) {
+            if (vk.vkAllocateCommandBuffers(self.device, &allocinfo, &self.commandbuffers[i]) != vk.VK_SUCCESS) {
                 std.log.err("Unable to create Command buffer", .{});
                 return error.CommandBufferAllocationFailed;
             }
@@ -439,7 +457,7 @@ pub const graphicalcontext = struct {
         }
         self.allocator.free(self.swapchainimageviews);
     }
-    fn createswapchain(self: *graphicalcontext) !void {
+    fn createswapchain(self: *graphicalcontext, oldswapchain: vk.VkSwapchainKHR) !void {
         const swapchainsprt: *swapchainsupport = try swapchainsupport.getSwapchainDetails(self, self.physicaldevice);
         defer swapchainsprt.deinit();
         const surfaceformat: vk.VkSurfaceFormatKHR = try swapchainsprt.chooseformat();
@@ -480,19 +498,23 @@ pub const graphicalcontext = struct {
         createinfo.presentMode = presentmode;
         createinfo.clipped = vk.VK_TRUE;
 
-        createinfo.oldSwapchain = null;
+        createinfo.oldSwapchain = oldswapchain;
         if (vk.vkCreateSwapchainKHR(self.device, &createinfo, null, &self.swapchain) != vk.VK_SUCCESS) {
             std.log.err("Unable to Create Swapchain", .{});
             return error.SwapChainCreationFailed;
         }
-
+    }
+    fn getswapchainImages(self: *graphicalcontext) !void {
+        var imagecount: u32 = 0;
         _ = vk.vkGetSwapchainImagesKHR(self.device, self.swapchain, &imagecount, null);
         self.swapchainimages = try self.allocator.alloc(vk.VkImage, imagecount);
         _ = vk.vkGetSwapchainImagesKHR(self.device, self.swapchain, &imagecount, &self.swapchainimages[0]);
     }
-    fn freeswapchain(self: *graphicalcontext) void {
+    fn destroyswapchainimages(self: *graphicalcontext) void {
         self.allocator.free(self.swapchainimages);
-        vk.vkDestroySwapchainKHR(self.device, self.swapchain, null);
+    }
+    fn freeswapchain(self: *graphicalcontext, swapchain: vk.VkSwapchainKHR) void {
+        vk.vkDestroySwapchainKHR(self.device, swapchain, null);
     }
     fn createsurface(self: *graphicalcontext) !void {
         if (vk.glfwCreateWindowSurface(self.instance, self.window, null, &self.surface) != vk.VK_SUCCESS) {

@@ -47,11 +47,15 @@ fn windowhandler(window: ?*vk.GLFWwindow) void {
         main.running = false;
     }
 }
-fn viewportsizeupdate(window: ?*vk.GLFWwindow) void {
+fn viewportsizeupdate(window: ?*vk.GLFWwindow, vkinstance: *utilty.graphicalcontext) void {
     //opengl viewport update
     var framebuffer: [2]c_int = undefined;
     vk.glfwGetFramebufferSize(window, &framebuffer[0], &framebuffer[1]);
     //do something
+    vkinstance.recreateswapchains() catch |err| {
+        std.log.err("Unable to recreate swapchain: {s}", .{@errorName(err)});
+        return;
+    };
 }
 const app_name = "vulkan-zig triangle example";
 pub fn draw() !void {
@@ -67,7 +71,7 @@ pub fn draw() !void {
     }
 
     vk.glfwWindowHint(vk.GLFW_CLIENT_API, vk.GLFW_NO_API);
-    vk.glfwWindowHint(vk.GLFW_RESIZABLE, vk.GLFW_FALSE);
+    //vk.glfwWindowHint(vk.GLFW_RESIZABLE, vk.GLFW_FALSE);
     const window = vk.glfwCreateWindow(
         @intCast(main.viewportsize[0]),
         @intCast(main.viewportsize[1]),
@@ -94,45 +98,50 @@ pub fn draw() !void {
         vk.glfwPollEvents();
         try drawframe(vkinstance);
         windowhandler(window);
-        viewportsizeupdate(window);
+        viewportsizeupdate(window, vkinstance);
     }
     _ = vk.vkDeviceWaitIdle(vkinstance.device);
 }
 const MAX_FRAMES_IN_FLIGHT: u32 = 2;
 var currentframe: usize = 0;
 fn drawframe(vkinstance: *utilty.graphicalcontext) !void {
-    _ = vk.vkWaitForFences(vkinstance.device, 1, &vkinstance.inflightfence[currentframe], vk.VK_TRUE, std.math.maxInt(u64));
-    _ = vk.vkResetFences(vkinstance.device, 1, &vkinstance.inflightfence[currentframe]);
+    _ = vk.vkWaitForFences(
+        vkinstance.device,
+        1,
+        &vkinstance.inflightfences[currentframe],
+        vk.VK_TRUE,
+        std.math.maxInt(u64),
+    );
     //TODO The vkAcquireNextImageKHR does not use swapchain image 0 after first loop
     var imageindex: u32 = undefined;
     _ = vk.vkAcquireNextImageKHR(
         vkinstance.device,
         vkinstance.swapchain,
         std.math.maxInt(u64),
-        vkinstance.imageavailablesephamore[currentframe],
+        vkinstance.imageavailablesephamores[currentframe],
         null,
         &imageindex,
     );
-
-    _ = vk.vkResetCommandBuffer(vkinstance.commandbuffer[currentframe], 0);
-    try vkinstance.recordcommandbuffer(vkinstance.commandbuffer[currentframe], imageindex);
+    _ = vk.vkResetFences(vkinstance.device, 1, &vkinstance.inflightfences[currentframe]);
+    _ = vk.vkResetCommandBuffer(vkinstance.commandbuffers[currentframe], 0);
+    try vkinstance.recordcommandbuffer(vkinstance.commandbuffers[currentframe], imageindex);
 
     var submitinfo: vk.VkSubmitInfo = .{};
     submitinfo.sType = vk.VK_STRUCTURE_TYPE_SUBMIT_INFO;
 
-    var waitsemaphores: [1]vk.VkSemaphore = .{vkinstance.imageavailablesephamore[currentframe]};
+    var waitsemaphores: [1]vk.VkSemaphore = .{vkinstance.imageavailablesephamores[currentframe]};
     var waitstages: [1]vk.VkPipelineStageFlags = .{vk.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT};
     submitinfo.waitSemaphoreCount = 1;
     submitinfo.pWaitSemaphores = &waitsemaphores[0];
     submitinfo.pWaitDstStageMask = &waitstages[0];
     submitinfo.commandBufferCount = 1;
-    submitinfo.pCommandBuffers = &vkinstance.commandbuffer[currentframe];
+    submitinfo.pCommandBuffers = &vkinstance.commandbuffers[currentframe];
 
-    var signalsemaphores: [1]vk.VkSemaphore = .{vkinstance.renderfinishedsephamore[imageindex]};
+    var signalsemaphores: [1]vk.VkSemaphore = .{vkinstance.renderfinishedsephamores[imageindex]};
     submitinfo.signalSemaphoreCount = 1;
     submitinfo.pSignalSemaphores = &signalsemaphores[0];
 
-    if (vk.vkQueueSubmit(vkinstance.graphicsqueue.queue, 1, &submitinfo, vkinstance.inflightfence[currentframe]) != vk.VK_SUCCESS) {
+    if (vk.vkQueueSubmit(vkinstance.graphicsqueue.queue, 1, &submitinfo, vkinstance.inflightfences[currentframe]) != vk.VK_SUCCESS) {
         std.log.err("Unable to Submit Queue", .{});
         return error.QueueSubmissionFailed;
     }
