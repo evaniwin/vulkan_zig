@@ -29,8 +29,11 @@ pub const graphicalcontext = struct {
     commandpool: vk.VkCommandPool,
     commandpooldatatransfer: vk.VkCommandPool,
     commandbuffers: []vk.VkCommandBuffer,
+
     vertexbuffer: vk.VkBuffer,
     vertexbuffermemory: vk.VkDeviceMemory,
+    indexbuffer: vk.VkBuffer,
+    indexbuffermemory: vk.VkDeviceMemory,
 
     instanceextensions: *helper.extensionarray,
     imageavailablesephamores: []vk.VkSemaphore,
@@ -63,6 +66,7 @@ pub const graphicalcontext = struct {
         try createcommandpools(self);
         try createsyncobjects(self);
         try createvertexbuffer(self);
+        try createindexbuffer(self);
         try createcommandbuffer(self);
         return self;
     }
@@ -77,6 +81,7 @@ pub const graphicalcontext = struct {
         destroyimageviews(self);
         destroyswapchainimages(self);
         freeswapchain(self, self.swapchain);
+        destroyindexbuffer(self);
         destroyvertexbuffer(self);
         destroylogicaldevice(self);
         destroydebugmessanger(self);
@@ -127,8 +132,9 @@ pub const graphicalcontext = struct {
         const vertexbuffers: [1]vk.VkBuffer = .{self.vertexbuffer};
         const offsets: [1]vk.VkDeviceSize = .{0};
         vk.vkCmdBindVertexBuffers(commandbuffer, 0, 1, &vertexbuffers[0], &offsets[0]);
+        vk.vkCmdBindIndexBuffer(commandbuffer, self.indexbuffer, 0, vk.VK_INDEX_TYPE_UINT32);
 
-        vk.vkCmdDraw(commandbuffer, vertices.len, 1, 0, 0);
+        vk.vkCmdDrawIndexed(commandbuffer, indices.len, 1, 0, 0, 0);
 
         vk.vkCmdEndRenderPass(commandbuffer);
 
@@ -153,6 +159,41 @@ pub const graphicalcontext = struct {
         try createrenderpass(self);
         try createframebuffers(self);
         if (swapchainimageslen != self.swapchainimages.len) @panic("swap chain image length mismatch After Recreation");
+    }
+    fn createindexbuffer(self: *graphicalcontext) !void {
+        const buffersize = @sizeOf(u32) * indices.len;
+        var stagingbuffer: vk.VkBuffer = undefined;
+        var stagingbuffermemory: vk.VkDeviceMemory = undefined;
+        try createbuffer(
+            self,
+            buffersize,
+            vk.VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+            vk.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | vk.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+            &stagingbuffer,
+            &stagingbuffermemory,
+        );
+
+        var memdata: ?*anyopaque = undefined;
+        _ = vk.vkMapMemory(self.device, stagingbuffermemory, 0, buffersize, 0, &memdata);
+        const ptr: [*]u32 = @ptrCast(@alignCast(memdata));
+        std.mem.copyForwards(u32, ptr[0..indices.len], &indices);
+        _ = vk.vkUnmapMemory(self.device, stagingbuffermemory);
+
+        try createbuffer(
+            self,
+            buffersize,
+            vk.VK_BUFFER_USAGE_INDEX_BUFFER_BIT | vk.VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+            vk.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+            &self.indexbuffer,
+            &self.indexbuffermemory,
+        );
+        try copybuffer(self, stagingbuffer, self.indexbuffer, buffersize);
+        vk.vkDestroyBuffer(self.device, stagingbuffer, null);
+        vk.vkFreeMemory(self.device, stagingbuffermemory, null);
+    }
+    fn destroyindexbuffer(self: *graphicalcontext) void {
+        vk.vkDestroyBuffer(self.device, self.indexbuffer, null);
+        vk.vkFreeMemory(self.device, self.indexbuffermemory, null);
     }
     fn copybuffer(self: *graphicalcontext, srcbuffer: vk.VkBuffer, dstbuffer: vk.VkBuffer, size: vk.VkDeviceSize) !void {
         _ = vk.vkWaitForFences(
@@ -1199,6 +1240,7 @@ const vertices: [3]data = .{
     .{ .vertex = .{ 0.5, 0.5, 0.0 }, .color = .{ 0.0, 1.0, 0.0 } },
     .{ .vertex = .{ -0.5, 0.5, 0.0 }, .color = .{ 0.0, 0.0, 1.0 } },
 };
+const indices: [3]u32 = .{ 0, 1, 2 };
 const vertexbufferconfig = struct {
     pub fn getbindingdescription(T: type) vk.VkVertexInputBindingDescription {
         var bindingdescription: vk.VkVertexInputBindingDescription = .{};
