@@ -27,6 +27,7 @@ pub const graphicalcontext = struct {
     graphicspipeline: vk.VkPipeline,
     swapchainframebuffers: []vk.VkFramebuffer,
     commandpool: vk.VkCommandPool,
+    commandpooldatatransfer: vk.VkCommandPool,
     commandbuffers: []vk.VkCommandBuffer,
     vertexbuffer: vk.VkBuffer,
     vertexbuffermemory: vk.VkDeviceMemory,
@@ -35,6 +36,7 @@ pub const graphicalcontext = struct {
     imageavailablesephamores: []vk.VkSemaphore,
     renderfinishedsephamores: []vk.VkSemaphore,
     inflightfences: []vk.VkFence,
+    datatransferfence: vk.VkFence,
     pub fn init(allocator: std.mem.Allocator, window: *vk.GLFWwindow) !*graphicalcontext {
         //allocate an instance of this struct
         const self: *graphicalcontext = allocator.create(graphicalcontext) catch |err| {
@@ -58,16 +60,16 @@ pub const graphicalcontext = struct {
         try createrenderpass(self);
         try creategraphicspipeline(self);
         try createframebuffers(self);
-        try createcommandpool(self);
+        try createcommandpools(self);
+        try createsyncobjects(self);
         try createvertexbuffer(self);
         try createcommandbuffer(self);
-        try createsyncobjects(self);
         return self;
     }
     pub fn deinit(self: *graphicalcontext) void {
         self.instanceextensions.free();
         destroysyncobjects(self);
-        vk.vkDestroyCommandPool(self.device, self.commandpool, null);
+        destroycommandpools(self);
         destroyframebuffers(self);
         vk.vkDestroyPipeline(self.device, self.graphicspipeline, null);
         vk.vkDestroyPipelineLayout(self.device, self.pipelinelayout, null);
@@ -152,20 +154,119 @@ pub const graphicalcontext = struct {
         try createframebuffers(self);
         if (swapchainimageslen != self.swapchainimages.len) @panic("swap chain image length mismatch After Recreation");
     }
+    fn copybuffer(self: *graphicalcontext, srcbuffer: vk.VkBuffer, dstbuffer: vk.VkBuffer, size: vk.VkDeviceSize) !void {
+        _ = vk.vkWaitForFences(
+            self.device,
+            1,
+            &self.datatransferfence,
+            vk.VK_TRUE,
+            std.math.maxInt(u64),
+        );
+        _ = vk.vkResetFences(self.device, 1, &self.datatransferfence);
+        var cmdbufferallocateinfo: vk.VkCommandBufferAllocateInfo = .{};
+        cmdbufferallocateinfo.sType = vk.VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+        cmdbufferallocateinfo.level = vk.VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        cmdbufferallocateinfo.commandPool = self.commandpooldatatransfer;
+        cmdbufferallocateinfo.commandBufferCount = 1;
+
+        var commandbuffer: vk.VkCommandBuffer = undefined;
+        if (vk.vkAllocateCommandBuffers(self.device, &cmdbufferallocateinfo, &commandbuffer) != vk.VK_SUCCESS) {
+            std.log.err("Unable to create Command buffer", .{});
+            return error.CommandBufferAllocationFailed;
+        }
+
+        var begininfo: vk.VkCommandBufferBeginInfo = .{};
+        begininfo.sType = vk.VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        begininfo.flags = vk.VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+
+        if (vk.vkBeginCommandBuffer(commandbuffer, &begininfo) != vk.VK_SUCCESS) {
+            std.log.err("Unable to Begin Recording Commandbufffer datatransfer", .{});
+            return error.FailedToBeginRecordingCommandBuffer;
+        }
+
+        var copyregion: vk.VkBufferCopy = .{};
+        copyregion.srcOffset = 0;
+        copyregion.dstOffset = 0;
+        copyregion.size = size;
+        vk.vkCmdCopyBuffer(commandbuffer, srcbuffer, dstbuffer, 1, &copyregion);
+        if (vk.vkEndCommandBuffer(commandbuffer) != vk.VK_SUCCESS) {
+            std.log.err("Unable to End Recording Commandbufffer datatransfer", .{});
+            return error.FailedToEndRecordingCommandBuffer;
+        }
+        var submitinfo: vk.VkSubmitInfo = .{};
+        submitinfo.sType = vk.VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        submitinfo.commandBufferCount = 1;
+        submitinfo.pCommandBuffers = &commandbuffer;
+
+        if (vk.vkQueueSubmit(self.graphicsqueue.queue, 1, &submitinfo, self.datatransferfence) != vk.VK_SUCCESS) {
+            std.log.err("Unable to Submit Queue", .{});
+            return error.QueueSubmissionFailed;
+        }
+        _ = vk.vkWaitForFences(
+            self.device,
+            1,
+            &self.datatransferfence,
+            vk.VK_TRUE,
+            std.math.maxInt(u64),
+        );
+        vk.vkFreeCommandBuffers(self.device, self.commandpooldatatransfer, 1, &commandbuffer);
+    }
     fn createvertexbuffer(self: *graphicalcontext) !void {
+        const buffersize = @sizeOf(data) * vertices.len;
+        var stagingbuffer: vk.VkBuffer = undefined;
+        var stagingbuffermemory: vk.VkDeviceMemory = undefined;
+        try createbuffer(
+            self,
+            buffersize,
+            vk.VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+            vk.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | vk.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+            &stagingbuffer,
+            &stagingbuffermemory,
+        );
+
+        var memdata: ?*anyopaque = undefined;
+        _ = vk.vkMapMemory(self.device, stagingbuffermemory, 0, buffersize, 0, &memdata);
+        const ptr: [*]data = @ptrCast(@alignCast(memdata));
+        std.mem.copyForwards(data, ptr[0..vertices.len], &vertices);
+        _ = vk.vkUnmapMemory(self.device, stagingbuffermemory);
+
+        try createbuffer(
+            self,
+            buffersize,
+            vk.VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | vk.VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+            vk.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+            &self.vertexbuffer,
+            &self.vertexbuffermemory,
+        );
+        try copybuffer(self, stagingbuffer, self.vertexbuffer, buffersize);
+        vk.vkDestroyBuffer(self.device, stagingbuffer, null);
+        vk.vkFreeMemory(self.device, stagingbuffermemory, null);
+    }
+    fn destroyvertexbuffer(self: *graphicalcontext) void {
+        vk.vkDestroyBuffer(self.device, self.vertexbuffer, null);
+        vk.vkFreeMemory(self.device, self.vertexbuffermemory, null);
+    }
+    fn createbuffer(
+        self: *graphicalcontext,
+        buffersize: vk.VkDeviceSize,
+        bufferusageflags: vk.VkBufferUsageFlags,
+        memorypropertiesflags: vk.VkMemoryPropertyFlags,
+        buffer: *vk.VkBuffer,
+        buffermemory: *vk.VkDeviceMemory,
+    ) !void {
         var buffercreateinfo: vk.VkBufferCreateInfo = .{};
         buffercreateinfo.sType = vk.VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-        buffercreateinfo.size = @sizeOf(data) * vertices.len;
-        buffercreateinfo.usage = vk.VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
+        buffercreateinfo.size = buffersize;
+        buffercreateinfo.usage = bufferusageflags;
         buffercreateinfo.sharingMode = vk.VK_SHARING_MODE_EXCLUSIVE;
         buffercreateinfo.flags = 0;
-        if (vk.vkCreateBuffer(self.device, &buffercreateinfo, null, &self.vertexbuffer) != vk.VK_SUCCESS) {
+        if (vk.vkCreateBuffer(self.device, &buffercreateinfo, null, buffer) != vk.VK_SUCCESS) {
             std.log.err("Unable to create vertex buffer", .{});
             return error.FailedToCreateVertexBuffer;
         }
 
         var memoryrequirements: vk.VkMemoryRequirements = .{};
-        vk.vkGetBufferMemoryRequirements(self.device, self.vertexbuffer, &memoryrequirements);
+        vk.vkGetBufferMemoryRequirements(self.device, buffer.*, &memoryrequirements);
 
         var allocationinfo: vk.VkMemoryAllocateInfo = .{};
         allocationinfo.sType = vk.VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
@@ -173,18 +274,13 @@ pub const graphicalcontext = struct {
         allocationinfo.memoryTypeIndex = try findmemorytype(
             self,
             memoryrequirements.memoryTypeBits,
-            vk.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | vk.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+            memorypropertiesflags,
         );
-        if (vk.vkAllocateMemory(self.device, &allocationinfo, null, &self.vertexbuffermemory) != vk.VK_SUCCESS) {
+        if (vk.vkAllocateMemory(self.device, &allocationinfo, null, buffermemory) != vk.VK_SUCCESS) {
             std.log.err("Unable to Allocate Gpu Memory", .{});
             return error.FailedToAllocateGpuMemory;
         }
-        _ = vk.vkBindBufferMemory(self.device, self.vertexbuffer, self.vertexbuffermemory, 0);
-        var memdata: ?*anyopaque = undefined;
-        _ = vk.vkMapMemory(self.device, self.vertexbuffermemory, 0, buffercreateinfo.size, 0, &memdata);
-        const ptr: [*]data = @ptrCast(@alignCast(memdata));
-        std.mem.copyForwards(data, ptr[0..vertices.len], &vertices);
-        _ = vk.vkUnmapMemory(self.device, self.vertexbuffermemory);
+        _ = vk.vkBindBufferMemory(self.device, buffer.*, buffermemory.*, 0);
     }
     fn findmemorytype(self: *graphicalcontext, typefilter: u32, properties: vk.VkMemoryPropertyFlags) !u32 {
         var memoryproperties: vk.VkPhysicalDeviceMemoryProperties = undefined;
@@ -198,16 +294,14 @@ pub const graphicalcontext = struct {
         std.log.err("Unable to find suitable memory type", .{});
         return error.FailedToFindSuitableMemory;
     }
-    fn destroyvertexbuffer(self: *graphicalcontext) void {
-        vk.vkDestroyBuffer(self.device, self.vertexbuffer, null);
-        vk.vkFreeMemory(self.device, self.vertexbuffermemory, null);
-    }
+
     fn destroysyncobjects(self: *graphicalcontext) void {
         for (0..self.swapchainimages.len) |i| {
             vk.vkDestroySemaphore(self.device, self.imageavailablesephamores[i], null);
             vk.vkDestroySemaphore(self.device, self.renderfinishedsephamores[i], null);
             vk.vkDestroyFence(self.device, self.inflightfences[i], null);
         }
+        vk.vkDestroyFence(self.device, self.datatransferfence, null);
         self.allocator.free(self.imageavailablesephamores);
         self.allocator.free(self.renderfinishedsephamores);
         self.allocator.free(self.inflightfences);
@@ -232,9 +326,13 @@ pub const graphicalcontext = struct {
                 return error.UnableToCreateSemaphore;
             }
             if (vk.vkCreateFence(self.device, &fencecreateinfo, null, &self.inflightfences[i]) != vk.VK_SUCCESS) {
-                std.log.err("Unable to Create Cpu fence", .{});
+                std.log.err("Unable to Create Cpu fence (render)", .{});
                 return error.UnableToCreateFence;
             }
+        }
+        if (vk.vkCreateFence(self.device, &fencecreateinfo, null, &self.datatransferfence) != vk.VK_SUCCESS) {
+            std.log.err("Unable to Create Cpu fence (datatransfer)", .{});
+            return error.UnableToCreateFence;
         }
     }
 
@@ -252,7 +350,7 @@ pub const graphicalcontext = struct {
             }
         }
     }
-    fn createcommandpool(self: *graphicalcontext) !void {
+    fn createcommandpools(self: *graphicalcontext) !void {
         var commandpoolcreateinfo: vk.VkCommandPoolCreateInfo = .{};
         commandpoolcreateinfo.sType = vk.VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
         commandpoolcreateinfo.flags = vk.VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
@@ -262,6 +360,20 @@ pub const graphicalcontext = struct {
             std.log.err("Unable to create Command Pool", .{});
             return error.CommandPoolCreationFailed;
         }
+
+        var commandpooldatatransfercreateinfo: vk.VkCommandPoolCreateInfo = .{};
+        commandpooldatatransfercreateinfo.sType = vk.VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+        commandpooldatatransfercreateinfo.flags = vk.VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT | vk.VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
+        commandpooldatatransfercreateinfo.queueFamilyIndex = self.graphicsqueue.familyindex;
+
+        if (vk.vkCreateCommandPool(self.device, &commandpooldatatransfercreateinfo, null, &self.commandpooldatatransfer) != vk.VK_SUCCESS) {
+            std.log.err("Unable to create Command Pool", .{});
+            return error.CommandPoolCreationFailed;
+        }
+    }
+    fn destroycommandpools(self: *graphicalcontext) void {
+        vk.vkDestroyCommandPool(self.device, self.commandpool, null);
+        vk.vkDestroyCommandPool(self.device, self.commandpooldatatransfer, null);
     }
     fn destroyframebuffers(self: *graphicalcontext) void {
         for (0..self.swapchainframebuffers.len) |i| {
