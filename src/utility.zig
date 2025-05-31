@@ -15,17 +15,22 @@ pub const graphicalcontext = struct {
     presentqueue: queuestr,
     debugmessanger: vk.VkDebugUtilsMessengerEXT,
     surface: vk.VkSurfaceKHR,
+
     swapchain: vk.VkSwapchainKHR,
     swapchainimages: []vk.VkImage,
     swapchainimageformat: vk.VkFormat,
     swapchainextent: vk.VkExtent2D,
     swapchainimageviews: []vk.VkImageView,
     renderpass: vk.VkRenderPass,
+
     pipelinelayout: vk.VkPipelineLayout,
     graphicspipeline: vk.VkPipeline,
     swapchainframebuffers: []vk.VkFramebuffer,
     commandpool: vk.VkCommandPool,
     commandbuffers: []vk.VkCommandBuffer,
+    vertexbuffer: vk.VkBuffer,
+    vertexbuffermemory: vk.VkDeviceMemory,
+
     instanceextensions: *helper.extensionarray,
     imageavailablesephamores: []vk.VkSemaphore,
     renderfinishedsephamores: []vk.VkSemaphore,
@@ -54,6 +59,7 @@ pub const graphicalcontext = struct {
         try creategraphicspipeline(self);
         try createframebuffers(self);
         try createcommandpool(self);
+        try createvertexbuffer(self);
         try createcommandbuffer(self);
         try createsyncobjects(self);
         return self;
@@ -69,6 +75,7 @@ pub const graphicalcontext = struct {
         destroyimageviews(self);
         destroyswapchainimages(self);
         freeswapchain(self, self.swapchain);
+        destroyvertexbuffer(self);
         destroylogicaldevice(self);
         destroydebugmessanger(self);
         vk.vkDestroySurfaceKHR(self.instance, self.surface, null);
@@ -76,57 +83,6 @@ pub const graphicalcontext = struct {
         self.allocator.free(self.commandbuffers);
         self.queuelist.deinit();
         self.allocator.destroy(self);
-    }
-    pub fn recreateswapchains(self: *graphicalcontext) !void {
-        const oldswapchain: vk.VkSwapchainKHR = self.swapchain;
-        const swapchainimageslen = self.swapchainimages.len;
-        try createswapchain(self, oldswapchain);
-        _ = vk.vkDeviceWaitIdle(self.device);
-        destroyswapchainimages(self);
-        destroyimageviews(self);
-        vk.vkDestroyRenderPass(self.device, self.renderpass, null);
-        destroyframebuffers(self);
-        freeswapchain(self, oldswapchain);
-        try getswapchainImages(self);
-        try createimageviews(self);
-        try createrenderpass(self);
-        try createframebuffers(self);
-        if (swapchainimageslen != self.swapchainimages.len) @panic("swap chain image length mismatch After Recreation");
-    }
-    fn destroysyncobjects(self: *graphicalcontext) void {
-        for (0..self.swapchainimages.len) |i| {
-            vk.vkDestroySemaphore(self.device, self.imageavailablesephamores[i], null);
-            vk.vkDestroySemaphore(self.device, self.renderfinishedsephamores[i], null);
-            vk.vkDestroyFence(self.device, self.inflightfences[i], null);
-        }
-        self.allocator.free(self.imageavailablesephamores);
-        self.allocator.free(self.renderfinishedsephamores);
-        self.allocator.free(self.inflightfences);
-    }
-    fn createsyncobjects(self: *graphicalcontext) !void {
-        var sephamorecreateinfo: vk.VkSemaphoreCreateInfo = .{};
-        sephamorecreateinfo.sType = vk.VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
-
-        var fencecreateinfo: vk.VkFenceCreateInfo = .{};
-        fencecreateinfo.sType = vk.VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
-        fencecreateinfo.flags = vk.VK_FENCE_CREATE_SIGNALED_BIT;
-        self.imageavailablesephamores = try self.allocator.alloc(vk.VkSemaphore, self.swapchainimages.len);
-        self.renderfinishedsephamores = try self.allocator.alloc(vk.VkSemaphore, self.swapchainimages.len);
-        self.inflightfences = try self.allocator.alloc(vk.VkFence, self.swapchainimages.len);
-        for (0..self.swapchainimages.len) |i| {
-            if (vk.vkCreateSemaphore(self.device, &sephamorecreateinfo, null, &self.imageavailablesephamores[i]) != vk.VK_SUCCESS) {
-                std.log.err("Unable to Create Gpu Semaphore", .{});
-                return error.UnableToCreateSemaphore;
-            }
-            if (vk.vkCreateSemaphore(self.device, &sephamorecreateinfo, null, &self.renderfinishedsephamores[i]) != vk.VK_SUCCESS) {
-                std.log.err("Unable to Create Gpu Semaphore", .{});
-                return error.UnableToCreateSemaphore;
-            }
-            if (vk.vkCreateFence(self.device, &fencecreateinfo, null, &self.inflightfences[i]) != vk.VK_SUCCESS) {
-                std.log.err("Unable to Create Cpu fence", .{});
-                return error.UnableToCreateFence;
-            }
-        }
     }
     pub fn recordcommandbuffer(self: *graphicalcontext, commandbuffer: vk.VkCommandBuffer, imageindex: u32) !void {
         var commandbufferbegininfo: vk.VkCommandBufferBeginInfo = .{};
@@ -166,7 +122,11 @@ pub const graphicalcontext = struct {
         scissor.extent = self.swapchainextent;
         vk.vkCmdSetScissor(commandbuffer, 0, 1, &scissor);
 
-        vk.vkCmdDraw(commandbuffer, 3, 1, 0, 0);
+        const vertexbuffers: [1]vk.VkBuffer = .{self.vertexbuffer};
+        const offsets: [1]vk.VkDeviceSize = .{0};
+        vk.vkCmdBindVertexBuffers(commandbuffer, 0, 1, &vertexbuffers[0], &offsets[0]);
+
+        vk.vkCmdDraw(commandbuffer, vertices.len, 1, 0, 0);
 
         vk.vkCmdEndRenderPass(commandbuffer);
 
@@ -175,6 +135,109 @@ pub const graphicalcontext = struct {
             return error.FailedToEndRecordingCommandBuffer;
         }
     }
+
+    pub fn recreateswapchains(self: *graphicalcontext) !void {
+        const oldswapchain: vk.VkSwapchainKHR = self.swapchain;
+        const swapchainimageslen = self.swapchainimages.len;
+        try createswapchain(self, oldswapchain);
+        _ = vk.vkDeviceWaitIdle(self.device);
+        destroyswapchainimages(self);
+        destroyimageviews(self);
+        vk.vkDestroyRenderPass(self.device, self.renderpass, null);
+        destroyframebuffers(self);
+        freeswapchain(self, oldswapchain);
+        try getswapchainImages(self);
+        try createimageviews(self);
+        try createrenderpass(self);
+        try createframebuffers(self);
+        if (swapchainimageslen != self.swapchainimages.len) @panic("swap chain image length mismatch After Recreation");
+    }
+    fn createvertexbuffer(self: *graphicalcontext) !void {
+        var buffercreateinfo: vk.VkBufferCreateInfo = .{};
+        buffercreateinfo.sType = vk.VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+        buffercreateinfo.size = @sizeOf(data) * vertices.len;
+        buffercreateinfo.usage = vk.VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
+        buffercreateinfo.sharingMode = vk.VK_SHARING_MODE_EXCLUSIVE;
+        buffercreateinfo.flags = 0;
+        if (vk.vkCreateBuffer(self.device, &buffercreateinfo, null, &self.vertexbuffer) != vk.VK_SUCCESS) {
+            std.log.err("Unable to create vertex buffer", .{});
+            return error.FailedToCreateVertexBuffer;
+        }
+
+        var memoryrequirements: vk.VkMemoryRequirements = .{};
+        vk.vkGetBufferMemoryRequirements(self.device, self.vertexbuffer, &memoryrequirements);
+
+        var allocationinfo: vk.VkMemoryAllocateInfo = .{};
+        allocationinfo.sType = vk.VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        allocationinfo.allocationSize = memoryrequirements.size;
+        allocationinfo.memoryTypeIndex = try findmemorytype(
+            self,
+            memoryrequirements.memoryTypeBits,
+            vk.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | vk.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+        );
+        if (vk.vkAllocateMemory(self.device, &allocationinfo, null, &self.vertexbuffermemory) != vk.VK_SUCCESS) {
+            std.log.err("Unable to Allocate Gpu Memory", .{});
+            return error.FailedToAllocateGpuMemory;
+        }
+        _ = vk.vkBindBufferMemory(self.device, self.vertexbuffer, self.vertexbuffermemory, 0);
+        var memdata: ?*anyopaque = undefined;
+        _ = vk.vkMapMemory(self.device, self.vertexbuffermemory, 0, buffercreateinfo.size, 0, &memdata);
+        const ptr: [*]data = @ptrCast(@alignCast(memdata));
+        std.mem.copyForwards(data, ptr[0..vertices.len], &vertices);
+        _ = vk.vkUnmapMemory(self.device, self.vertexbuffermemory);
+    }
+    fn findmemorytype(self: *graphicalcontext, typefilter: u32, properties: vk.VkMemoryPropertyFlags) !u32 {
+        var memoryproperties: vk.VkPhysicalDeviceMemoryProperties = undefined;
+        vk.vkGetPhysicalDeviceMemoryProperties(self.physicaldevice, &memoryproperties);
+        for (0..memoryproperties.memoryTypeCount) |i| {
+            if ((typefilter & (@as(u32, 1) << @as(u5, @intCast(i)))) != 0 and (memoryproperties.memoryTypes[i].propertyFlags & properties) != 0) {
+                return @intCast(i);
+            }
+            if (i == std.math.maxInt(u5)) break;
+        }
+        std.log.err("Unable to find suitable memory type", .{});
+        return error.FailedToFindSuitableMemory;
+    }
+    fn destroyvertexbuffer(self: *graphicalcontext) void {
+        vk.vkDestroyBuffer(self.device, self.vertexbuffer, null);
+        vk.vkFreeMemory(self.device, self.vertexbuffermemory, null);
+    }
+    fn destroysyncobjects(self: *graphicalcontext) void {
+        for (0..self.swapchainimages.len) |i| {
+            vk.vkDestroySemaphore(self.device, self.imageavailablesephamores[i], null);
+            vk.vkDestroySemaphore(self.device, self.renderfinishedsephamores[i], null);
+            vk.vkDestroyFence(self.device, self.inflightfences[i], null);
+        }
+        self.allocator.free(self.imageavailablesephamores);
+        self.allocator.free(self.renderfinishedsephamores);
+        self.allocator.free(self.inflightfences);
+    }
+    fn createsyncobjects(self: *graphicalcontext) !void {
+        var sephamorecreateinfo: vk.VkSemaphoreCreateInfo = .{};
+        sephamorecreateinfo.sType = vk.VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+
+        var fencecreateinfo: vk.VkFenceCreateInfo = .{};
+        fencecreateinfo.sType = vk.VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+        fencecreateinfo.flags = vk.VK_FENCE_CREATE_SIGNALED_BIT;
+        self.imageavailablesephamores = try self.allocator.alloc(vk.VkSemaphore, self.swapchainimages.len);
+        self.renderfinishedsephamores = try self.allocator.alloc(vk.VkSemaphore, self.swapchainimages.len);
+        self.inflightfences = try self.allocator.alloc(vk.VkFence, self.swapchainimages.len);
+        for (0..self.swapchainimages.len) |i| {
+            if (vk.vkCreateSemaphore(self.device, &sephamorecreateinfo, null, &self.imageavailablesephamores[i]) != vk.VK_SUCCESS) {
+                std.log.err("Unable to Create Gpu Semaphore", .{});
+                return error.UnableToCreateSemaphore;
+            }
+            if (vk.vkCreateSemaphore(self.device, &sephamorecreateinfo, null, &self.renderfinishedsephamores[i]) != vk.VK_SUCCESS) {
+                std.log.err("Unable to Create Gpu Semaphore", .{});
+                return error.UnableToCreateSemaphore;
+            }
+            if (vk.vkCreateFence(self.device, &fencecreateinfo, null, &self.inflightfences[i]) != vk.VK_SUCCESS) {
+                std.log.err("Unable to Create Cpu fence", .{});
+                return error.UnableToCreateFence;
+            }
+        }
+    }
+
     fn createcommandbuffer(self: *graphicalcontext) !void {
         self.commandbuffers = try self.allocator.alloc(vk.VkCommandBuffer, self.swapchainimages.len);
         var allocinfo: vk.VkCommandBufferAllocateInfo = .{};
@@ -309,13 +372,15 @@ pub const graphicalcontext = struct {
         dynamicstatecreateinfo.dynamicStateCount = dynamicstates.len;
         dynamicstatecreateinfo.pDynamicStates = &dynamicstates[0];
 
+        var bindingdescription = vertexbufferconfig.getbindingdescription(data);
+        var attributedescribtions = vertexbufferconfig.getattributedescruptions(data);
         //this structure describes the format of the vertex data that will be passed to the vertex shader
         var vertexinputinfo: vk.VkPipelineVertexInputStateCreateInfo = .{};
         vertexinputinfo.sType = vk.VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
-        vertexinputinfo.vertexBindingDescriptionCount = 0;
-        vertexinputinfo.pVertexBindingDescriptions = null;
-        vertexinputinfo.vertexAttributeDescriptionCount = 0;
-        vertexinputinfo.pVertexAttributeDescriptions = null;
+        vertexinputinfo.vertexBindingDescriptionCount = 1;
+        vertexinputinfo.pVertexBindingDescriptions = &bindingdescription;
+        vertexinputinfo.vertexAttributeDescriptionCount = attributedescribtions.len;
+        vertexinputinfo.pVertexAttributeDescriptions = &attributedescribtions[0];
 
         var inputassembly: vk.VkPipelineInputAssemblyStateCreateInfo = .{};
         inputassembly.sType = vk.VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
@@ -1011,6 +1076,36 @@ const graphicsqueue = struct {
     }
     pub fn unmarkQueueInuse(self: *graphicsqueue, Queue: u32) void {
         self.inUseQueue[Queue] = false;
+    }
+};
+const data = extern struct {
+    vertex: [3]f32,
+    color: [3]f32,
+};
+const vertices: [3]data = .{
+    .{ .vertex = .{ 0.0, -0.5, 0.0 }, .color = .{ 1.0, 0.0, 0.0 } },
+    .{ .vertex = .{ 0.5, 0.5, 0.0 }, .color = .{ 0.0, 1.0, 0.0 } },
+    .{ .vertex = .{ -0.5, 0.5, 0.0 }, .color = .{ 0.0, 0.0, 1.0 } },
+};
+const vertexbufferconfig = struct {
+    pub fn getbindingdescription(T: type) vk.VkVertexInputBindingDescription {
+        var bindingdescription: vk.VkVertexInputBindingDescription = .{};
+        bindingdescription.binding = 0;
+        bindingdescription.stride = @sizeOf(T);
+        bindingdescription.inputRate = vk.VK_VERTEX_INPUT_RATE_VERTEX;
+        return bindingdescription;
+    }
+    pub fn getattributedescruptions(T: type) [2]vk.VkVertexInputAttributeDescription {
+        var attributedescriptions: [2]vk.VkVertexInputAttributeDescription = undefined;
+        attributedescriptions[0].binding = 0;
+        attributedescriptions[0].location = 0;
+        attributedescriptions[0].format = vk.VK_FORMAT_R32G32B32_SFLOAT;
+        attributedescriptions[0].offset = @offsetOf(T, "vertex");
+        attributedescriptions[1].binding = 0;
+        attributedescriptions[1].location = 1;
+        attributedescriptions[1].format = vk.VK_FORMAT_R32G32B32_SFLOAT;
+        attributedescriptions[1].offset = @offsetOf(T, "color");
+        return attributedescriptions;
     }
 };
 export fn debugCallback(
