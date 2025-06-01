@@ -110,7 +110,7 @@ pub fn draw() !void {
     _ = vk.vkDeviceWaitIdle(vkinstance.device);
 }
 var recreateswapchain: bool = false;
-const MAX_FRAMES_IN_FLIGHT: u32 = 4;
+const MAX_FRAMES_IN_FLIGHT: u32 = 1;
 var currentframe: usize = 0;
 fn drawframe(vkinstance: *utilty.graphicalcontext) !void {
     _ = vk.vkWaitForFences(
@@ -199,7 +199,7 @@ fn updateuniformbuffer(frame: usize, vkinstance: *utilty.graphicalcontext) !void
         0.1,
         10.0,
     );
-    //ubo.projection = .{ .{ 1, 0, 0, 0 }, .{ 0, 1, 0, 0 }, .{ 0, 0, 1, 0 }, .{ 0, 0, 0, 1 } };
+
     const ptr: [*]drawing.uniformbufferobject = @ptrCast(@alignCast(vkinstance.uniformbuffermemotymapped[frame]));
     ptr[0] = ubo;
 }

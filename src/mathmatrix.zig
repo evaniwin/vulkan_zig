@@ -11,15 +11,13 @@ pub fn lookat(eye: [3]f32, center: [3]f32, up: [3]f32) [4][4]f32 {
 }
 
 pub fn perspective(fov: f32, width: f32, height: f32, near: f32, far: f32) [4][4]f32 {
-    const h = std.math.cos(fov / 2) / std.math.sin(fov / 2);
-    const w = h * height / width;
-    const c = far / (near - far);
-    const d = (far * near) / (near - far);
+    const focallength = 1 / std.math.tan(fov / 2);
+    const aspectratio = width / height;
     return .{
-        .{ w, 0, 0, 0 },
-        .{ 0, -h, 0, 0 },
-        .{ 0, 0, c, -1 },
-        .{ 0, 0, d, 0 },
+        .{ focallength / aspectratio, 0, 0, 0 },
+        .{ 0, -focallength, 0, 0 },
+        .{ 0, 0, near / (far - near), near * far / (far - near) },
+        .{ 0, 0, -1, 0 },
     };
 }
 

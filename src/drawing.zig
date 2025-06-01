@@ -3,9 +3,9 @@ pub const data = extern struct {
     color: [3]f32,
 };
 pub const vertices: [3]data = .{
-    .{ .vertex = .{ 0.0, -0.1, 0.0 }, .color = .{ 1.0, 0.0, 0.0 } },
-    .{ .vertex = .{ 0.1, 0.1, 0.0 }, .color = .{ 0.0, 1.0, 0.0 } },
-    .{ .vertex = .{ -0.1, 0.1, 0.0 }, .color = .{ 0.0, 0.0, 1.0 } },
+    .{ .vertex = .{ 0.0, -0.5, 0.0 }, .color = .{ 1.0, 0.0, 0.0 } },
+    .{ .vertex = .{ 0.5, 0.5, 0.0 }, .color = .{ 0.0, 1.0, 0.0 } },
+    .{ .vertex = .{ -0.5, 0.5, 0.0 }, .color = .{ 0.0, 0.0, 1.0 } },
 };
 pub const indices: [3]u32 = .{ 0, 1, 2 };
 pub const uniformbufferobject = extern struct {
