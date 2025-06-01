@@ -41,7 +41,9 @@ fn framebuffersizecallback(_: ?*vk.GLFWwindow, _: c_int, _: c_int) callconv(.c) 
 fn errorcallback(err: c_int, decsription: [*c]const u8) callconv(.c) void {
     std.log.err("glfw error code{d}--{any}", .{ err, decsription });
 }
+var cursorpos: [2]f64 = .{ 0, 0 };
 fn cursorposcallback(_: ?*vk.GLFWwindow, xpos: f64, ypos: f64) callconv(.c) void {
+    cursorpos = .{ xpos, ypos };
     std.debug.print("x:{d} y:{d}\n", .{ xpos, ypos });
 }
 fn windowhandler(window: ?*vk.GLFWwindow) void {
@@ -135,6 +137,7 @@ fn drawframe(vkinstance: *utilty.graphicalcontext) !void {
         std.log.err("unable to obtain swapchain image acquire", .{});
         return;
     }
+    try updateuniformbuffer(currentframe, vkinstance);
     _ = vk.vkResetFences(vkinstance.device, 1, &vkinstance.inflightfences[currentframe]);
     _ = vk.vkResetCommandBuffer(vkinstance.commandbuffers[currentframe], 0);
     try vkinstance.recordcommandbuffer(vkinstance.commandbuffers[currentframe], imageindex);
@@ -180,6 +183,26 @@ fn drawframe(vkinstance: *utilty.graphicalcontext) !void {
     }
     currentframe = (currentframe + 1) % @min(vkinstance.swapchainimages.len, MAX_FRAMES_IN_FLIGHT);
 }
+
+fn updateuniformbuffer(frame: usize, vkinstance: *utilty.graphicalcontext) !void {
+    var ubo: drawing.uniformbufferobject = undefined;
+    ubo.model = mathmatrix.rotate(
+        .{ .{ 1, 0, 0, 0 }, .{ 0, 1, 0, 0 }, .{ 0, 0, 1, 0 }, .{ 0, 0, 0, 1 } },
+        std.math.degreesToRadians(10),
+        .{ 0, 0, 1 },
+    );
+    ubo.view = mathmatrix.lookat(.{ 2, 2, 2 }, .{ 0, 0, 0 }, .{ 0, 0, 1 });
+    ubo.projection = mathmatrix.perspective(
+        std.math.degreesToRadians(45),
+        @floatFromInt(vkinstance.swapchainextent.width),
+        @floatFromInt(vkinstance.swapchainextent.height),
+        0.1,
+        10.0,
+    );
+    //ubo.projection = .{ .{ 1, 0, 0, 0 }, .{ 0, 1, 0, 0 }, .{ 0, 0, 1, 0 }, .{ 0, 0, 0, 1 } };
+    const ptr: [*]drawing.uniformbufferobject = @ptrCast(@alignCast(vkinstance.uniformbuffermemotymapped[frame]));
+    ptr[0] = ubo;
+}
 const freetype = @cImport({
     @cInclude("freetype2/freetype/freetype.h");
     @cInclude("freetype2/ft2build.h");
@@ -188,6 +211,8 @@ pub const vk = @cImport({
     @cInclude("vulkan/vulkan.h");
     @cInclude("GLFW/glfw3.h");
 });
+const mathmatrix = @import("mathmatrix.zig");
+const drawing = @import("drawing.zig");
 const helper = @import("helpers.zig");
 const utilty = @import("utility.zig");
 const main = @import("main.zig");
