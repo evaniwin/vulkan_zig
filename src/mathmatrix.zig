@@ -29,19 +29,18 @@ pub fn orthographic(left: f32, right: f32, bottom: f32, top: f32, near: f32, far
         .{ 0.0, 0.0, 0.0, 1.0 },
     };
 }
-pub fn rotate(basemat: [4][4]f32, angle: f32, axis: [3]f32) [4][4]f32 {
+pub fn rotate(angle: f32, axis: [3]f32) [4][4]f32 {
     const cosa = std.math.cos(angle);
     const sina = std.math.sin(angle);
     const naxis = vec3normalize(axis);
-    const temp = vec3constmulti(1 - cosa, naxis);
     const rotatemat: [4][4]f32 = .{
-        .{ cosa + temp[0] * naxis[0], temp[0] * naxis[1] + sina * naxis[2], temp[0] * naxis[2] - sina * naxis[1], 0 },
-        .{ temp[1] * naxis[0] - sina * naxis[2], cosa + temp[1] * naxis[1], temp[1] * naxis[2] + sina * naxis[0], 0 },
-        .{ temp[2] * naxis[0] + sina * naxis[1], temp[2] * naxis[1] - sina * naxis[0], cosa + temp[2] * naxis[2], 0 },
+        .{ cosa + naxis[0] * naxis[0] * (1 - cosa), naxis[0] * naxis[1] * (1 - cosa) - naxis[2] * sina, naxis[0] * naxis[2] * (1 - cosa) + naxis[1] * sina, 0 },
+        .{ naxis[1] * naxis[0] * (1 - cosa) + naxis[2] * sina, cosa + naxis[1] * naxis[1] * (1 - cosa), naxis[1] * naxis[2] * (1 - cosa) - naxis[0] * sina, 0 },
+        .{ naxis[2] * naxis[0] * (1 - cosa) - naxis[1] * sina, naxis[2] * naxis[1] * (1 - cosa) + naxis[0] * sina, cosa + naxis[2] * naxis[2] * (1 - cosa), 0 },
         .{ 0, 0, 0, 1 },
     };
 
-    return mat4x4multi(basemat, rotatemat);
+    return rotatemat;
 }
 
 ///AxB
