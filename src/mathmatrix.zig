@@ -1,11 +1,11 @@
-pub fn lookat(eye: [3]f32, center: [3]f32, up: [3]f32) [4][4]f32 {
-    const f = vec3normalize(vec3sub(center, eye));
-    const s = vec3normalize(vec3cross(f, up));
-    const u = vec3cross(s, f);
+pub fn lookat(eye: [3]f32, center: [3]f32, Up: [3]f32) [4][4]f32 {
+    const front = vec3normalize(vec3sub(center, eye));
+    const right = vec3normalize(vec3cross(front, Up));
+    const up = vec3normalize(vec3cross(right, front));
     return .{
-        .{ s[0], u[0], -f[0], -vec3dot(s, eye) },
-        .{ s[1], u[1], -f[1], -vec3dot(u, eye) },
-        .{ s[2], u[2], -f[2], vec3dot(f, eye) },
+        .{ right[0], up[0], -front[0], -vec3dot(right, eye) },
+        .{ right[1], up[1], -front[1], -vec3dot(up, eye) },
+        .{ right[2], up[2], -front[2], vec3dot(front, eye) },
         .{ 0, 0, 0, 1 },
     };
 }
