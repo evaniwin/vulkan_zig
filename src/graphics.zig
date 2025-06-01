@@ -110,7 +110,7 @@ pub fn draw() !void {
     _ = vk.vkDeviceWaitIdle(vkinstance.device);
 }
 var recreateswapchain: bool = false;
-const MAX_FRAMES_IN_FLIGHT: u32 = 2;
+const MAX_FRAMES_IN_FLIGHT: u32 = 4;
 var currentframe: usize = 0;
 fn drawframe(vkinstance: *utilty.graphicalcontext) !void {
     _ = vk.vkWaitForFences(
@@ -188,7 +188,7 @@ fn updateuniformbuffer(frame: usize, vkinstance: *utilty.graphicalcontext) !void
     var ubo: drawing.uniformbufferobject = undefined;
     ubo.model = mathmatrix.rotate(
         .{ .{ 1, 0, 0, 0 }, .{ 0, 1, 0, 0 }, .{ 0, 0, 1, 0 }, .{ 0, 0, 0, 1 } },
-        std.math.degreesToRadians(10),
+        @floatCast(std.math.degreesToRadians(cursorpos[0])),
         .{ 0, 0, 1 },
     );
     ubo.view = mathmatrix.lookat(.{ 2, 2, 2 }, .{ 0, 0, 0 }, .{ 0, 0, 1 });
