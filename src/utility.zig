@@ -71,6 +71,7 @@ pub const graphicalcontext = struct {
         try creategraphicspipeline(self);
         try createframebuffers(self);
         try createcommandpools(self);
+        try createtextureimage(self);
         try createsyncobjects(self);
         try createvertexbuffer(self);
         try createindexbuffer(self);
@@ -174,6 +175,103 @@ pub const graphicalcontext = struct {
         try createrenderpass(self);
         try createframebuffers(self);
         if (swapchainimageslen != self.swapchainimages.len) @panic("swap chain image length mismatch After Recreation");
+    }
+    //TODO create seperare funciton for loading image
+    fn user_error_fn(_: png.png_structp, error_msg: [*c]const u8) callconv(.c) void {
+        std.log.err("Libpng error: {s}", .{std.mem.span(error_msg)});
+
+        errorlibpng = 1;
+    }
+
+    fn user_warning_fn(_: png.png_structp, warning_msg: [*c]const u8) callconv(.c) void {
+        std.log.warn("Libpng warning: {s}", .{std.mem.span(warning_msg)});
+    }
+    var errorlibpng: ?u8 = 0;
+    fn createtextureimage(self: *graphicalcontext) !void {
+        const dir = std.c.fopen("resources/green.png", "rb");
+
+        if (dir == null) {
+            std.log.err("unable to open texture file", .{});
+            return error.UnableToOpenTextureFile;
+        }
+        defer _ = std.c.fclose(dir.?);
+        var header: [8]u8 = undefined;
+        const result = std.c.fread(&header, 1, header.len, dir.?);
+        if (header.len != result) {
+            std.log.err("unable to Read texture file", .{});
+            return error.UnableToReadTextureFile;
+        }
+        const is_png = png.png_sig_cmp(&header[0], 0, header.len);
+        if (is_png != 0) {
+            std.log.err("The file signature dosent match a png", .{});
+            return error.FileNotPng;
+        }
+        var pngptr: png.png_structp = png.png_create_read_struct(
+            png.PNG_LIBPNG_VER_STRING,
+            @ptrCast(&errorlibpng),
+            user_error_fn,
+            user_warning_fn,
+        );
+        if (pngptr == null) {
+            std.log.err("unable to Create png pointer", .{});
+            return error.UnableToCreatePngptr;
+        }
+        var pnginfoptr: png.png_infop = png.png_create_info_struct(pngptr);
+        if (pnginfoptr == null) {
+            std.log.err("unable to Create png info pointer", .{});
+            png.png_destroy_read_struct(&pngptr, null, null);
+            return error.UnableToCreatePngInfoptr;
+        }
+        var pngendinfoptr: png.png_infop = png.png_create_info_struct(pngptr);
+        if (pngendinfoptr == null) {
+            std.log.err("unable to Create png end info pointer", .{});
+            png.png_destroy_read_struct(&pngptr, &pnginfoptr, null);
+            return error.UnableToCreatePngEndInfoptr;
+        }
+
+        defer png.png_destroy_read_struct(&pngptr, &pnginfoptr, &pngendinfoptr);
+
+        png.png_init_io(pngptr, @ptrCast(dir));
+        png.png_set_sig_bytes(pngptr, header.len);
+        png.png_read_info(pngptr, pnginfoptr);
+
+        png.png_set_expand(pngptr);
+        png.png_set_strip_16(pngptr);
+        png.png_set_palette_to_rgb(pngptr);
+        png.png_set_gray_to_rgb(pngptr);
+        png.png_set_add_alpha(pngptr, 0xFF, png.PNG_FILLER_AFTER);
+
+        //const width = png.png_get_image_width(pngptr, pnginfoptr);
+        const height = png.png_get_image_height(pngptr, pnginfoptr);
+        const rowbytes = png.png_get_rowbytes(pngptr, pnginfoptr);
+
+        const pixels: []u8 = try self.allocator.alloc(u8, height * rowbytes);
+        defer self.allocator.free(pixels);
+        const rows: []png.png_bytep = try self.allocator.alloc(png.png_bytep, height);
+        defer self.allocator.free(rows);
+        for (0..height) |i| {
+            rows[i] = &pixels[i * rowbytes];
+        }
+        png.png_read_image(pngptr, &rows[0]);
+
+        const imagesize: vk.VkDeviceSize = height * rowbytes;
+
+        var stagingbuffer: vk.VkBuffer = undefined;
+        var stagingbuffermemory: vk.VkDeviceMemory = undefined;
+        try createbuffer(
+            self,
+            imagesize,
+            vk.VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+            vk.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | vk.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+            &stagingbuffer,
+            &stagingbuffermemory,
+        );
+
+        var memdata: ?*anyopaque = undefined;
+        _ = vk.vkMapMemory(self.device, stagingbuffermemory, 0, imagesize, 0, &memdata);
+        const ptr: [*]u8 = @ptrCast(@alignCast(memdata));
+        std.mem.copyForwards(u8, ptr[0..pixels.len], pixels);
+        _ = vk.vkUnmapMemory(self.device, stagingbuffermemory);
     }
     fn createdescriptorpool(self: *graphicalcontext) !void {
         var descriptorpoolsize: vk.VkDescriptorPoolSize = .{};
@@ -1403,6 +1501,12 @@ export fn debugCallback(
     return vk.VK_FALSE;
 }
 
+const png = @cImport({
+    @cInclude("png.h");
+});
+const c = @cImport({
+    @cInclude("setjmp.h");
+});
 const drawing = @import("drawing.zig");
 pub const vk = graphics.vk;
 const graphics = @import("graphics.zig");

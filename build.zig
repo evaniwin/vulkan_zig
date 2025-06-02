@@ -55,6 +55,7 @@ pub fn build(b: *std.Build) !void {
     exe.linkLibC();
     exe.linkSystemLibrary("freetype2");
     exe.linkSystemLibrary("glfw");
+    exe.linkSystemLibrary("png");
     exe.linkSystemLibrary("vulkan");
 
     // This declares intent for the executable to be installed into the
