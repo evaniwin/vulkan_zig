@@ -477,14 +477,16 @@ pub const graphicalcontext = struct {
         try self.endsingletimecommands(commandbuffer);
     }
     fn createdescriptorpool(self: *graphicalcontext) !void {
-        var descriptorpoolsize: vk.VkDescriptorPoolSize = .{};
-        descriptorpoolsize.type = vk.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-        descriptorpoolsize.descriptorCount = @intCast(self.swapchainimages.len);
+        var descriptorpoolsizes: [2]vk.VkDescriptorPoolSize = undefined;
+        descriptorpoolsizes[0].type = vk.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        descriptorpoolsizes[0].descriptorCount = @intCast(self.swapchainimages.len);
+        descriptorpoolsizes[1].type = vk.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        descriptorpoolsizes[1].descriptorCount = @intCast(self.swapchainimages.len);
 
         var poolcreateinfo: vk.VkDescriptorPoolCreateInfo = .{};
         poolcreateinfo.sType = vk.VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-        poolcreateinfo.poolSizeCount = 1;
-        poolcreateinfo.pPoolSizes = &descriptorpoolsize;
+        poolcreateinfo.poolSizeCount = @intCast(descriptorpoolsizes.len);
+        poolcreateinfo.pPoolSizes = &descriptorpoolsizes[0];
         poolcreateinfo.maxSets = @intCast(self.swapchainimages.len);
 
         if (vk.vkCreateDescriptorPool(self.device, &poolcreateinfo, null, &self.descriptorpool) != vk.VK_SUCCESS) {
@@ -519,18 +521,35 @@ pub const graphicalcontext = struct {
             bufferinfo.offset = 0;
             bufferinfo.range = @sizeOf(drawing.uniformbufferobject);
 
-            var writedescriptorset: vk.VkWriteDescriptorSet = .{};
-            writedescriptorset.sType = vk.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            writedescriptorset.dstSet = self.descriptorsets[i];
-            writedescriptorset.dstBinding = 0;
-            writedescriptorset.dstArrayElement = 0;
-            writedescriptorset.descriptorType = vk.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-            writedescriptorset.descriptorCount = 1;
-            writedescriptorset.pBufferInfo = &bufferinfo;
-            writedescriptorset.pImageInfo = null;
-            writedescriptorset.pTexelBufferView = null;
+            var imageinfo: vk.VkDescriptorImageInfo = .{};
+            imageinfo.imageLayout = vk.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            imageinfo.imageView = self.textureimageview;
+            imageinfo.sampler = self.textureimagesampler;
 
-            vk.vkUpdateDescriptorSets(self.device, 1, &writedescriptorset, 0, null);
+            var writedescriptorset: [2]vk.VkWriteDescriptorSet = undefined;
+            writedescriptorset[0].sType = vk.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            writedescriptorset[0].dstSet = self.descriptorsets[i];
+            writedescriptorset[0].dstBinding = 0;
+            writedescriptorset[0].dstArrayElement = 0;
+            writedescriptorset[0].descriptorType = vk.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+            writedescriptorset[0].descriptorCount = 1;
+            writedescriptorset[0].pBufferInfo = &bufferinfo;
+            writedescriptorset[0].pImageInfo = null;
+            writedescriptorset[0].pTexelBufferView = null;
+            writedescriptorset[0].pNext = null;
+
+            writedescriptorset[1].sType = vk.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            writedescriptorset[1].dstSet = self.descriptorsets[i];
+            writedescriptorset[1].dstBinding = 1;
+            writedescriptorset[1].dstArrayElement = 0;
+            writedescriptorset[1].descriptorType = vk.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            writedescriptorset[1].descriptorCount = 1;
+            writedescriptorset[1].pBufferInfo = null;
+            writedescriptorset[1].pImageInfo = &imageinfo;
+            writedescriptorset[1].pTexelBufferView = null;
+            writedescriptorset[1].pNext = null;
+
+            vk.vkUpdateDescriptorSets(self.device, writedescriptorset.len, &writedescriptorset[0], 0, null);
         }
     }
     fn destroydescriptorSets(self: *graphicalcontext) void {
@@ -544,10 +563,18 @@ pub const graphicalcontext = struct {
         ubolayoutbinding.stageFlags = vk.VK_SHADER_STAGE_VERTEX_BIT;
         ubolayoutbinding.pImmutableSamplers = null;
 
+        var samplerlayoutbinding: vk.VkDescriptorSetLayoutBinding = .{};
+        samplerlayoutbinding.binding = 1;
+        samplerlayoutbinding.descriptorCount = 1;
+        samplerlayoutbinding.descriptorType = vk.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        samplerlayoutbinding.stageFlags = vk.VK_SHADER_STAGE_FRAGMENT_BIT;
+        samplerlayoutbinding.pImmutableSamplers = null;
+
+        var bindings: [2]vk.VkDescriptorSetLayoutBinding = .{ ubolayoutbinding, samplerlayoutbinding };
         var layoutcreateinfo: vk.VkDescriptorSetLayoutCreateInfo = .{};
         layoutcreateinfo.sType = vk.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        layoutcreateinfo.bindingCount = 1;
-        layoutcreateinfo.pBindings = &ubolayoutbinding;
+        layoutcreateinfo.bindingCount = @intCast(bindings.len);
+        layoutcreateinfo.pBindings = &bindings[0];
 
         if (vk.vkCreateDescriptorSetLayout(self.device, &layoutcreateinfo, null, &self.descriptorsetlayout) != vk.VK_SUCCESS) {
             std.log.err("Unable to create Descriptor Set Layout", .{});
@@ -1688,16 +1715,23 @@ const vertexbufferconfig = struct {
         bindingdescription.inputRate = vk.VK_VERTEX_INPUT_RATE_VERTEX;
         return bindingdescription;
     }
-    pub fn getattributedescruptions(T: type) [2]vk.VkVertexInputAttributeDescription {
-        var attributedescriptions: [2]vk.VkVertexInputAttributeDescription = undefined;
+    pub fn getattributedescruptions(T: type) [3]vk.VkVertexInputAttributeDescription {
+        var attributedescriptions: [3]vk.VkVertexInputAttributeDescription = undefined;
         attributedescriptions[0].binding = 0;
         attributedescriptions[0].location = 0;
         attributedescriptions[0].format = vk.VK_FORMAT_R32G32B32_SFLOAT;
         attributedescriptions[0].offset = @offsetOf(T, "vertex");
+
         attributedescriptions[1].binding = 0;
         attributedescriptions[1].location = 1;
         attributedescriptions[1].format = vk.VK_FORMAT_R32G32B32_SFLOAT;
         attributedescriptions[1].offset = @offsetOf(T, "color");
+
+        attributedescriptions[2].binding = 0;
+        attributedescriptions[2].location = 2;
+        attributedescriptions[2].format = vk.VK_FORMAT_R32G32_SFLOAT;
+        attributedescriptions[2].offset = @offsetOf(T, "texcoord");
+
         return attributedescriptions;
     }
 };
