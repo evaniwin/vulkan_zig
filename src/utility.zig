@@ -9,6 +9,8 @@ pub const graphicalcontext = struct {
     window: *vk.GLFWwindow,
     instance: vk.VkInstance,
     physicaldevice: vk.VkPhysicalDevice,
+    physicaldeviceproperties: vk.VkPhysicalDeviceProperties,
+    physicaldevicefeatures: vk.VkPhysicalDeviceFeatures,
     device: vk.VkDevice,
     queuelist: *graphicsqueue,
     graphicsqueue: queuestr,
@@ -42,6 +44,8 @@ pub const graphicalcontext = struct {
     uniformbuffermemotymapped: []?*anyopaque,
     textureimage: vk.VkImage,
     textureimagememory: vk.VkDeviceMemory,
+    textureimageview: vk.VkImageView,
+    textureimagesampler: vk.VkSampler,
 
     instanceextensions: *helper.extensionarray,
     imageavailablesephamores: []vk.VkSemaphore,
@@ -76,6 +80,8 @@ pub const graphicalcontext = struct {
         try createframebuffers(self);
         try createcommandpools(self);
         try createtextureimage(self);
+        try createtextureimageview(self);
+        try createtextureimagesampler(self);
         try createvertexbuffer(self);
         try createindexbuffer(self);
         try createuniformbuffers(self);
@@ -87,6 +93,8 @@ pub const graphicalcontext = struct {
     pub fn deinit(self: *graphicalcontext) void {
         self.instanceextensions.free();
         destroysyncobjects(self);
+        destroytextureimagesampler(self);
+        destroytextureimageview(self);
         destroyimage(self, self.textureimage, self.textureimagememory);
         destroycommandpools(self);
         destroyframebuffers(self);
@@ -159,7 +167,7 @@ pub const graphicalcontext = struct {
         vk.vkCmdEndRenderPass(commandbuffer);
 
         if (vk.vkEndCommandBuffer(commandbuffer) != vk.VK_SUCCESS) {
-            std.log.err("Unable to End Recording Commandbufffer", .{});
+            std.log.err("Unable to End Recording Commandbuffer", .{});
             return error.FailedToEndRecordingCommandBuffer;
         }
     }
@@ -179,6 +187,39 @@ pub const graphicalcontext = struct {
         try createrenderpass(self);
         try createframebuffers(self);
         if (swapchainimageslen != self.swapchainimages.len) @panic("swap chain image length mismatch After Recreation");
+    }
+    fn createtextureimagesampler(self: *graphicalcontext) !void {
+        var samplercreateinfo: vk.VkSamplerCreateInfo = .{};
+        samplercreateinfo.sType = vk.VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+        samplercreateinfo.magFilter = vk.VK_FILTER_LINEAR;
+        samplercreateinfo.minFilter = vk.VK_FILTER_LINEAR;
+        samplercreateinfo.addressModeU = vk.VK_SAMPLER_ADDRESS_MODE_REPEAT;
+        samplercreateinfo.addressModeV = vk.VK_SAMPLER_ADDRESS_MODE_REPEAT;
+        samplercreateinfo.addressModeW = vk.VK_SAMPLER_ADDRESS_MODE_REPEAT;
+        samplercreateinfo.anisotropyEnable = self.physicaldevicefeatures.samplerAnisotropy;
+        samplercreateinfo.maxAnisotropy = self.physicaldeviceproperties.limits.maxSamplerAnisotropy;
+        samplercreateinfo.borderColor = vk.VK_BORDER_COLOR_INT_OPAQUE_BLACK;
+        samplercreateinfo.unnormalizedCoordinates = vk.VK_FALSE;
+        samplercreateinfo.compareEnable = vk.VK_FALSE;
+        samplercreateinfo.compareOp = vk.VK_COMPARE_OP_ALWAYS;
+        samplercreateinfo.mipmapMode = vk.VK_SAMPLER_MIPMAP_MODE_LINEAR;
+        samplercreateinfo.mipLodBias = 0;
+        samplercreateinfo.minLod = 0;
+        samplercreateinfo.maxLod = 0;
+
+        if (vk.vkCreateSampler(self.device, &samplercreateinfo, null, &self.textureimagesampler) != vk.VK_SUCCESS) {
+            std.log.err("Unable to Create Image sampler for Texture", .{});
+            return error.FailedToCreateTextureImageSampler;
+        }
+    }
+    fn destroytextureimagesampler(self: *graphicalcontext) void {
+        vk.vkDestroySampler(self.device, self.textureimagesampler, null);
+    }
+    fn createtextureimageview(self: *graphicalcontext) !void {
+        try self.createimageview(self.textureimage, &self.textureimageview, vk.VK_FORMAT_R8G8B8A8_SRGB);
+    }
+    fn destroytextureimageview(self: *graphicalcontext) void {
+        self.destroyimageview(self.textureimageview);
     }
     //TODO create seperare funciton for loading image
     fn user_error_fn(pngptr: png.png_structp, error_msg: [*c]const u8) callconv(.c) void {
@@ -1036,35 +1077,42 @@ pub const graphicalcontext = struct {
     fn createimageviews(self: *graphicalcontext) !void {
         self.swapchainimageviews = try self.allocator.alloc(vk.VkImageView, self.swapchainimages.len);
         for (0..self.swapchainimageviews.len) |i| {
-            var createinfo: vk.VkImageViewCreateInfo = .{};
-            createinfo.sType = vk.VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-            createinfo.image = self.swapchainimages[i];
-
-            createinfo.viewType = vk.VK_IMAGE_VIEW_TYPE_2D;
-            createinfo.format = self.swapchainimageformat;
-
-            createinfo.components.r = vk.VK_COMPONENT_SWIZZLE_IDENTITY;
-            createinfo.components.g = vk.VK_COMPONENT_SWIZZLE_IDENTITY;
-            createinfo.components.b = vk.VK_COMPONENT_SWIZZLE_IDENTITY;
-            createinfo.components.a = vk.VK_COMPONENT_SWIZZLE_IDENTITY;
-
-            createinfo.subresourceRange.aspectMask = vk.VK_IMAGE_ASPECT_COLOR_BIT;
-            createinfo.subresourceRange.baseMipLevel = 0;
-            createinfo.subresourceRange.levelCount = 1;
-            createinfo.subresourceRange.baseArrayLayer = 0;
-            createinfo.subresourceRange.layerCount = 1;
-
-            if (vk.vkCreateImageView(self.device, &createinfo, null, &self.swapchainimageviews[i]) != vk.VK_SUCCESS) {
-                std.log.err("Failed to Create image Views", .{});
-                return error.FailedToCreateImageView;
-            }
+            try self.createimageview(self.swapchainimages[i], &self.swapchainimageviews[i], self.swapchainimageformat);
         }
     }
+    fn createimageview(self: *graphicalcontext, image: vk.VkImage, imageview: *vk.VkImageView, format: vk.VkFormat) !void {
+        var createinfo: vk.VkImageViewCreateInfo = .{};
+        createinfo.sType = vk.VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        createinfo.image = image;
+
+        createinfo.viewType = vk.VK_IMAGE_VIEW_TYPE_2D;
+        createinfo.format = format;
+
+        createinfo.components.r = vk.VK_COMPONENT_SWIZZLE_IDENTITY;
+        createinfo.components.g = vk.VK_COMPONENT_SWIZZLE_IDENTITY;
+        createinfo.components.b = vk.VK_COMPONENT_SWIZZLE_IDENTITY;
+        createinfo.components.a = vk.VK_COMPONENT_SWIZZLE_IDENTITY;
+
+        createinfo.subresourceRange.aspectMask = vk.VK_IMAGE_ASPECT_COLOR_BIT;
+        createinfo.subresourceRange.baseMipLevel = 0;
+        createinfo.subresourceRange.levelCount = 1;
+        createinfo.subresourceRange.baseArrayLayer = 0;
+        createinfo.subresourceRange.layerCount = 1;
+
+        if (vk.vkCreateImageView(self.device, &createinfo, null, imageview) != vk.VK_SUCCESS) {
+            std.log.err("Failed to Create image Views", .{});
+            return error.FailedToCreateImageView;
+        }
+    }
+
     fn destroyimageviews(self: *graphicalcontext) void {
         for (self.swapchainimageviews) |imageview| {
-            vk.vkDestroyImageView(self.device, imageview, null);
+            self.destroyimageview(imageview);
         }
         self.allocator.free(self.swapchainimageviews);
+    }
+    fn destroyimageview(self: *graphicalcontext, imageview: vk.VkImageView) void {
+        vk.vkDestroyImageView(self.device, imageview, null);
     }
     fn createswapchain(self: *graphicalcontext, oldswapchain: vk.VkSwapchainKHR) !void {
         const swapchainsprt: *swapchainsupport = try swapchainsupport.getSwapchainDetails(self, self.physicaldevice);
@@ -1165,7 +1213,7 @@ pub const graphicalcontext = struct {
             quecreateinfos[i].pQueuePriorities = &quepriority;
         } //specify device features
         var physicaldevicefeatures: vk.VkPhysicalDeviceFeatures = .{};
-
+        physicaldevicefeatures.samplerAnisotropy = self.physicaldevicefeatures.samplerAnisotropy;
         //creating logicaldevice
         var createinfo: vk.VkDeviceCreateInfo = .{};
         createinfo.sType = vk.VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
@@ -1229,6 +1277,8 @@ pub const graphicalcontext = struct {
         }
         if (topscore > 0) {
             self.physicaldevice = devicelist[topdevice];
+            vk.vkGetPhysicalDeviceProperties(self.physicaldevice, &self.physicaldeviceproperties);
+            vk.vkGetPhysicalDeviceFeatures(self.physicaldevice, &self.physicaldevicefeatures);
         }
         if (self.physicaldevice == null) {
             std.log.err("Unable to find suitable Gpu", .{});
@@ -1242,6 +1292,13 @@ pub const graphicalcontext = struct {
         var devicefeatures: vk.VkPhysicalDeviceFeatures = .{};
         vk.vkGetPhysicalDeviceProperties(device, &deviceproperties);
         vk.vkGetPhysicalDeviceFeatures(device, &devicefeatures);
+
+        //check device properties
+
+        //check device features
+        if (devicefeatures.samplerAnisotropy == vk.VK_TRUE) {
+            score = score + 10;
+        }
 
         //check extension
         const devicecompatibility = try checkdeviceextensionsupport(self, device);
