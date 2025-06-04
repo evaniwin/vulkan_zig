@@ -3,7 +3,8 @@ pub const allocator = gpa.allocator();
 pub fn main() !void {
     gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-
+    const object = try obj.obj.init(allocator, "resources/teapot.obj");
+    object.deinit();
     const renderthr = std.Thread.spawn(.{}, render, .{}) catch |err| {
         std.log.err("Unable to spawn thread: {s}", .{@errorName(err)});
         return;
@@ -16,7 +17,7 @@ fn render() void {
         return;
     };
 }
-
+const obj = @import("parseobj.zig");
 pub var viewportsize: [2]c_int = .{ 400, 400 };
 pub var running = true;
 const graphics = @import("graphics.zig");
