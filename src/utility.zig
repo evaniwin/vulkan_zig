@@ -46,6 +46,9 @@ pub const graphicalcontext = struct {
     textureimagememory: vk.VkDeviceMemory,
     textureimageview: vk.VkImageView,
     textureimagesampler: vk.VkSampler,
+    depthimage: vk.VkImage,
+    depthimagememory: vk.VkDeviceMemory,
+    depthimageview: vk.VkImageView,
 
     instanceextensions: *helper.extensionarray,
     imageavailablesephamores: []vk.VkSemaphore,
@@ -77,8 +80,9 @@ pub const graphicalcontext = struct {
         try createrenderpass(self);
         try createdescriptorsetlayout(self);
         try creategraphicspipeline(self);
-        try createframebuffers(self);
         try createcommandpools(self);
+        try createdepthresources(self);
+        try createframebuffers(self);
         try createtextureimage(self);
         try createtextureimageview(self);
         try createtextureimagesampler(self);
@@ -98,6 +102,7 @@ pub const graphicalcontext = struct {
         destroyimage(self, self.textureimage, self.textureimagememory);
         destroycommandpools(self);
         destroyframebuffers(self);
+        destroydepthresources(self);
         vk.vkDestroyPipeline(self.device, self.graphicspipeline, null);
         vk.vkDestroyPipelineLayout(self.device, self.pipelinelayout, null);
         vk.vkDestroyRenderPass(self.device, self.renderpass, null);
@@ -134,9 +139,11 @@ pub const graphicalcontext = struct {
         renderpassbegininfo.framebuffer = self.swapchainframebuffers[imageindex];
         renderpassbegininfo.renderArea.offset = .{ .x = 0, .y = 0 };
         renderpassbegininfo.renderArea.extent = self.swapchainextent;
-        var clearcolor: vk.VkClearValue = .{ .color = vk.VkClearColorValue{ .int32 = .{ 0, 0, 0, 0 } } };
-        renderpassbegininfo.clearValueCount = 1;
-        renderpassbegininfo.pClearValues = &clearcolor;
+        var clearcolor: [2]vk.VkClearValue = undefined;
+        clearcolor[0].color = vk.VkClearColorValue{ .int32 = .{ 0, 0, 0, 0 } };
+        clearcolor[1].depthStencil = vk.VkClearDepthStencilValue{ .depth = 1, .stencil = 0 };
+        renderpassbegininfo.clearValueCount = clearcolor.len;
+        renderpassbegininfo.pClearValues = &clearcolor[0];
 
         vk.vkCmdBeginRenderPass(commandbuffer, &renderpassbegininfo, vk.VK_SUBPASS_CONTENTS_INLINE);
 
@@ -177,6 +184,7 @@ pub const graphicalcontext = struct {
         const swapchainimageslen = self.swapchainimages.len;
         try createswapchain(self, oldswapchain);
         _ = vk.vkDeviceWaitIdle(self.device);
+        destroydepthresources(self);
         destroyswapchainimages(self);
         destroyimageviews(self);
         vk.vkDestroyRenderPass(self.device, self.renderpass, null);
@@ -184,9 +192,70 @@ pub const graphicalcontext = struct {
         freeswapchain(self, oldswapchain);
         try getswapchainImages(self);
         try createimageviews(self);
+        try createdepthresources(self);
         try createrenderpass(self);
         try createframebuffers(self);
         if (swapchainimageslen != self.swapchainimages.len) @panic("swap chain image length mismatch After Recreation");
+    }
+    fn destroydepthresources(self: *graphicalcontext) void {
+        vk.vkDestroyImageView(self.device, self.depthimageview, null);
+        vk.vkDestroyImage(self.device, self.depthimage, null);
+        vk.vkFreeMemory(self.device, self.depthimagememory, null);
+    }
+    fn createdepthresources(self: *graphicalcontext) !void {
+        const depthformat: vk.VkFormat = try self.finddepthformat();
+        try createimage(
+            self,
+            self.device,
+            self.swapchainextent.width,
+            self.swapchainextent.height,
+            depthformat,
+            vk.VK_IMAGE_TILING_OPTIMAL,
+            vk.VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
+            vk.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+            &self.depthimage,
+            &self.depthimagememory,
+        );
+        try createimageview(
+            self,
+            self.depthimage,
+            &self.depthimageview,
+            depthformat,
+            vk.VK_IMAGE_ASPECT_DEPTH_BIT,
+        );
+        try transitionimagelayout(
+            self,
+            self.depthimage,
+            depthformat,
+            vk.VK_IMAGE_LAYOUT_UNDEFINED,
+            vk.VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+        );
+    }
+
+    fn finddepthformat(self: *graphicalcontext) !vk.VkFormat {
+        var formats: [3]vk.VkFormat = .{ vk.VK_FORMAT_D32_SFLOAT, vk.VK_FORMAT_D32_SFLOAT_S8_UINT, vk.VK_FORMAT_D24_UNORM_S8_UINT };
+        return findsupportedformats(
+            self,
+            &formats,
+            vk.VK_IMAGE_TILING_OPTIMAL,
+            vk.VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT,
+        );
+    }
+    fn findsupportedformats(self: *graphicalcontext, formatcanadates: []vk.VkFormat, tiling: vk.VkImageTiling, features: vk.VkFormatFeatureFlags) !vk.VkFormat {
+        for (formatcanadates) |format| {
+            var properties: vk.VkFormatProperties = undefined;
+            vk.vkGetPhysicalDeviceFormatProperties(self.physicaldevice, format, &properties);
+            if (tiling == vk.VK_IMAGE_TILING_LINEAR and ((properties.linearTilingFeatures & features) == features)) {
+                return format;
+            } else if (tiling == vk.VK_IMAGE_TILING_OPTIMAL and ((properties.optimalTilingFeatures & features) == features)) {
+                return format;
+            }
+        }
+        std.log.err("Unable to Find supported format", .{});
+        return error.FailedToFindSupportedImageFormat;
+    }
+    fn checkstencilcomponent(format: vk.VkFormat) bool {
+        return (format == vk.VK_FORMAT_D32_SFLOAT_S8_UINT or format == vk.VK_FORMAT_D24_UNORM_S8_UINT);
     }
     fn createtextureimagesampler(self: *graphicalcontext) !void {
         var samplercreateinfo: vk.VkSamplerCreateInfo = .{};
@@ -216,7 +285,7 @@ pub const graphicalcontext = struct {
         vk.vkDestroySampler(self.device, self.textureimagesampler, null);
     }
     fn createtextureimageview(self: *graphicalcontext) !void {
-        try self.createimageview(self.textureimage, &self.textureimageview, vk.VK_FORMAT_R8G8B8A8_SRGB);
+        try self.createimageview(self.textureimage, &self.textureimageview, vk.VK_FORMAT_R8G8B8A8_SRGB, vk.VK_IMAGE_ASPECT_COLOR_BIT);
     }
     fn destroytextureimageview(self: *graphicalcontext) void {
         self.destroyimageview(self.textureimageview);
@@ -431,7 +500,6 @@ pub const graphicalcontext = struct {
     }
     fn transitionimagelayout(self: *graphicalcontext, image: vk.VkImage, format: vk.VkFormat, oldlayout: vk.VkImageLayout, newlayout: vk.VkImageLayout) !void {
         const commandbuffer: vk.VkCommandBuffer = try self.beginsingletimecommands();
-        _ = format; //TODO in depth buffer chapter
         var barrier: vk.VkImageMemoryBarrier = .{};
         barrier.sType = vk.VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
         barrier.oldLayout = oldlayout;
@@ -439,28 +507,45 @@ pub const graphicalcontext = struct {
         barrier.srcQueueFamilyIndex = vk.VK_QUEUE_FAMILY_IGNORED;
         barrier.dstQueueFamilyIndex = vk.VK_QUEUE_FAMILY_IGNORED;
         barrier.image = image;
-        barrier.subresourceRange.aspectMask = vk.VK_IMAGE_ASPECT_COLOR_BIT;
         barrier.subresourceRange.baseMipLevel = 0;
         barrier.subresourceRange.levelCount = 1;
         barrier.subresourceRange.baseArrayLayer = 0;
         barrier.subresourceRange.layerCount = 1;
+        if (newlayout == vk.VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL) {
+            barrier.subresourceRange.aspectMask = vk.VK_IMAGE_ASPECT_DEPTH_BIT;
+
+            if (checkstencilcomponent(format)) {
+                barrier.subresourceRange.aspectMask = vk.VK_IMAGE_ASPECT_STENCIL_BIT | vk.VK_IMAGE_ASPECT_DEPTH_BIT;
+            } else {
+                barrier.subresourceRange.aspectMask = vk.VK_IMAGE_ASPECT_DEPTH_BIT;
+            }
+        } else {
+            barrier.subresourceRange.aspectMask = vk.VK_IMAGE_ASPECT_COLOR_BIT;
+        }
         var sourcestage: vk.VkPipelineStageFlags = undefined;
         var destinationstage: vk.VkPipelineStageFlags = undefined;
         if (oldlayout == vk.VK_IMAGE_LAYOUT_UNDEFINED and newlayout == vk.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL) {
             barrier.srcAccessMask = 0;
             barrier.dstAccessMask = vk.VK_ACCESS_TRANSFER_WRITE_BIT;
+
             sourcestage = vk.VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
             destinationstage = vk.VK_PIPELINE_STAGE_TRANSFER_BIT;
         } else if (oldlayout == vk.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL and newlayout == vk.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
             barrier.srcAccessMask = vk.VK_ACCESS_TRANSFER_WRITE_BIT;
             barrier.dstAccessMask = vk.VK_ACCESS_SHADER_READ_BIT;
+
             sourcestage = vk.VK_PIPELINE_STAGE_TRANSFER_BIT;
             destinationstage = vk.VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+        } else if (oldlayout == vk.VK_IMAGE_LAYOUT_UNDEFINED and newlayout == vk.VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL) {
+            barrier.srcAccessMask = 0;
+            barrier.dstAccessMask = vk.VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | vk.VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+
+            sourcestage = vk.VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+            destinationstage = vk.VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
         } else {
             std.log.err("Unsupported Layout Transition", .{});
             return error.UnsupportedLayoutTransition;
         }
-        //TODO
         vk.vkCmdPipelineBarrier(
             commandbuffer,
             sourcestage,
@@ -884,11 +969,11 @@ pub const graphicalcontext = struct {
         self.swapchainframebuffers = try self.allocator.alloc(vk.VkFramebuffer, self.swapchainimageviews.len);
 
         for (0..self.swapchainimageviews.len) |i| {
-            var attachments: [1]vk.VkImageView = .{self.swapchainimageviews[i]};
+            var attachments: [2]vk.VkImageView = .{ self.swapchainimageviews[i], self.depthimageview };
             var framebuffercreateinfo: vk.VkFramebufferCreateInfo = .{};
             framebuffercreateinfo.sType = vk.VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
             framebuffercreateinfo.renderPass = self.renderpass;
-            framebuffercreateinfo.attachmentCount = 1;
+            framebuffercreateinfo.attachmentCount = attachments.len;
             framebuffercreateinfo.pAttachments = &attachments[0];
             framebuffercreateinfo.width = self.swapchainextent.width;
             framebuffercreateinfo.height = self.swapchainextent.height;
@@ -910,27 +995,43 @@ pub const graphicalcontext = struct {
         colorattachment.initialLayout = vk.VK_IMAGE_LAYOUT_UNDEFINED;
         colorattachment.finalLayout = vk.VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
 
+        var depthattachment: vk.VkAttachmentDescription = .{};
+        depthattachment.format = try self.finddepthformat();
+        depthattachment.samples = vk.VK_SAMPLE_COUNT_1_BIT;
+        depthattachment.loadOp = vk.VK_ATTACHMENT_LOAD_OP_CLEAR;
+        depthattachment.storeOp = vk.VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        depthattachment.stencilLoadOp = vk.VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        depthattachment.stencilStoreOp = vk.VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        depthattachment.initialLayout = vk.VK_IMAGE_LAYOUT_UNDEFINED;
+        depthattachment.finalLayout = vk.VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+
         var colorattachmentrefrence: vk.VkAttachmentReference = .{};
         colorattachmentrefrence.attachment = 0;
         colorattachmentrefrence.layout = vk.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
+        var depthattachmentrefrence: vk.VkAttachmentReference = .{};
+        depthattachmentrefrence.attachment = 1;
+        depthattachmentrefrence.layout = vk.VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
 
         var subpass: vk.VkSubpassDescription = .{};
         subpass.pipelineBindPoint = vk.VK_PIPELINE_BIND_POINT_GRAPHICS;
         subpass.colorAttachmentCount = 1;
         subpass.pColorAttachments = &colorattachmentrefrence;
+        subpass.pDepthStencilAttachment = &depthattachmentrefrence;
 
         var subpassdependency: vk.VkSubpassDependency = .{};
         subpassdependency.srcSubpass = vk.VK_SUBPASS_EXTERNAL;
         subpassdependency.dstSubpass = 0;
-        subpassdependency.srcStageMask = vk.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        subpassdependency.srcStageMask = vk.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | vk.VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
         subpassdependency.srcAccessMask = 0;
-        subpassdependency.dstStageMask = vk.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-        subpassdependency.dstAccessMask = vk.VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+        subpassdependency.dstStageMask = vk.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | vk.VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
+        subpassdependency.dstAccessMask = vk.VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | vk.VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
 
+        var attachments: [2]vk.VkAttachmentDescription = .{ colorattachment, depthattachment };
         var renderpasscreateinfo: vk.VkRenderPassCreateInfo = .{};
         renderpasscreateinfo.sType = vk.VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
-        renderpasscreateinfo.attachmentCount = 1;
-        renderpasscreateinfo.pAttachments = &colorattachment;
+        renderpasscreateinfo.attachmentCount = attachments.len;
+        renderpasscreateinfo.pAttachments = &attachments[0];
         renderpasscreateinfo.subpassCount = 1;
         renderpasscreateinfo.pSubpasses = &subpass;
         renderpasscreateinfo.dependencyCount = 1;
@@ -1039,7 +1140,17 @@ pub const graphicalcontext = struct {
         multisampling.alphaToCoverageEnable = vk.VK_FALSE;
         multisampling.alphaToOneEnable = vk.VK_FALSE;
 
-        //placeholder for depth and stencil tests
+        var depthstencil: vk.VkPipelineDepthStencilStateCreateInfo = .{};
+        depthstencil.sType = vk.VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+        depthstencil.depthTestEnable = vk.VK_TRUE;
+        depthstencil.depthWriteEnable = vk.VK_TRUE;
+        depthstencil.depthCompareOp = vk.VK_COMPARE_OP_LESS;
+        depthstencil.depthBoundsTestEnable = vk.VK_FALSE;
+        depthstencil.minDepthBounds = 0;
+        depthstencil.maxDepthBounds = 1;
+        depthstencil.stencilTestEnable = vk.VK_FALSE;
+        depthstencil.front = .{};
+        depthstencil.back = .{};
 
         var colorblendattachment: vk.VkPipelineColorBlendAttachmentState = .{};
         colorblendattachment.colorWriteMask = vk.VK_COLOR_COMPONENT_R_BIT | vk.VK_COLOR_COMPONENT_G_BIT | vk.VK_COLOR_COMPONENT_B_BIT | vk.VK_COLOR_COMPONENT_A_BIT;
@@ -1084,7 +1195,7 @@ pub const graphicalcontext = struct {
         graphicspipelinecreateinfo.pViewportState = &viewportstatecreateinfo;
         graphicspipelinecreateinfo.pRasterizationState = &rasterizer;
         graphicspipelinecreateinfo.pMultisampleState = &multisampling;
-        graphicspipelinecreateinfo.pDepthStencilState = null;
+        graphicspipelinecreateinfo.pDepthStencilState = &depthstencil;
         graphicspipelinecreateinfo.pColorBlendState = &colourblendcreateinfo;
         graphicspipelinecreateinfo.pDynamicState = &dynamicstatecreateinfo;
         graphicspipelinecreateinfo.layout = self.pipelinelayout;
@@ -1104,10 +1215,10 @@ pub const graphicalcontext = struct {
     fn createimageviews(self: *graphicalcontext) !void {
         self.swapchainimageviews = try self.allocator.alloc(vk.VkImageView, self.swapchainimages.len);
         for (0..self.swapchainimageviews.len) |i| {
-            try self.createimageview(self.swapchainimages[i], &self.swapchainimageviews[i], self.swapchainimageformat);
+            try self.createimageview(self.swapchainimages[i], &self.swapchainimageviews[i], self.swapchainimageformat, vk.VK_IMAGE_ASPECT_COLOR_BIT);
         }
     }
-    fn createimageview(self: *graphicalcontext, image: vk.VkImage, imageview: *vk.VkImageView, format: vk.VkFormat) !void {
+    fn createimageview(self: *graphicalcontext, image: vk.VkImage, imageview: *vk.VkImageView, format: vk.VkFormat, aspectflags: vk.VkImageAspectFlags) !void {
         var createinfo: vk.VkImageViewCreateInfo = .{};
         createinfo.sType = vk.VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
         createinfo.image = image;
@@ -1120,7 +1231,7 @@ pub const graphicalcontext = struct {
         createinfo.components.b = vk.VK_COMPONENT_SWIZZLE_IDENTITY;
         createinfo.components.a = vk.VK_COMPONENT_SWIZZLE_IDENTITY;
 
-        createinfo.subresourceRange.aspectMask = vk.VK_IMAGE_ASPECT_COLOR_BIT;
+        createinfo.subresourceRange.aspectMask = aspectflags;
         createinfo.subresourceRange.baseMipLevel = 0;
         createinfo.subresourceRange.levelCount = 1;
         createinfo.subresourceRange.baseArrayLayer = 0;

@@ -3,9 +3,9 @@ pub fn lookat(eye: [3]f32, center: [3]f32, Up: [3]f32) [4][4]f32 {
     const right = vec3normalize(vec3cross(front, Up));
     const up = vec3normalize(vec3cross(right, front));
     return .{
-        .{ right[0], up[0], -front[0], -vec3dot(right, eye) },
-        .{ right[1], up[1], -front[1], -vec3dot(up, eye) },
-        .{ right[2], up[2], -front[2], vec3dot(front, eye) },
+        .{ right[0], right[1], right[2], -vec3dot(right, eye) },
+        .{ up[0], up[1], up[2], -vec3dot(up, eye) },
+        .{ -front[0], -front[1], -front[2], vec3dot(front, eye) },
         .{ 0, 0, 0, 1 },
     };
 }
@@ -16,7 +16,7 @@ pub fn perspective(fov: f32, width: f32, height: f32, near: f32, far: f32) [4][4
     return .{
         .{ focallength / aspectratio, 0, 0, 0 },
         .{ 0, -focallength, 0, 0 },
-        .{ 0, 0, near / (far - near), near * far / (far - near) },
+        .{ 0, 0, far / (near - far), near * far / (near - far) },
         .{ 0, 0, -1, 0 },
     };
 }
