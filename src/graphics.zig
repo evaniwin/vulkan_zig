@@ -189,9 +189,9 @@ fn updateuniformbuffer(frame: usize, vkinstance: *utilty.graphicalcontext) !void
     var ubo: drawing.uniformbufferobject = undefined;
     ubo.model = mathmatrix.rotate(
         @floatCast(std.math.degreesToRadians(@as(f32, @floatFromInt(timer.read())) / 10000000)),
-        .{ 0, 0, 1 },
+        .{ 0, 1, 0 },
     );
-    ubo.view = mathmatrix.lookat(.{ 2, 2, 2 }, .{ 0, 0, 0 }, .{ 0, 0, 1 });
+    ubo.view = mathmatrix.lookat(.{ 2, 3, 3 }, .{ 0, 0, 0 }, .{ 0, 1, 0 });
     ubo.projection = mathmatrix.perspective(
         std.math.degreesToRadians(45),
         @floatFromInt(vkinstance.swapchainextent.width),

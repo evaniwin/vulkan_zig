@@ -75,7 +75,7 @@ pub const obj = struct {
                 .color = .{ 0, 0, 0 },
                 .texcoord = .{
                     self.texcoords[data[i][1]].coord[0],
-                    self.texcoords[data[i][1]].coord[0],
+                    1 - self.texcoords[data[i][1]].coord[1],
                 },
             };
         }
