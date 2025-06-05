@@ -42,6 +42,7 @@ pub const graphicalcontext = struct {
     uniformbuffer: []vk.VkBuffer,
     uniformbuffermemory: []vk.VkDeviceMemory,
     uniformbuffermemotymapped: []?*anyopaque,
+    miplevels: u32,
     textureimage: vk.VkImage,
     textureimagememory: vk.VkDeviceMemory,
     textureimageview: vk.VkImageView,
@@ -224,6 +225,7 @@ pub const graphicalcontext = struct {
             self.device,
             self.swapchainextent.width,
             self.swapchainextent.height,
+            1,
             depthformat,
             vk.VK_IMAGE_TILING_OPTIMAL,
             vk.VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
@@ -237,6 +239,7 @@ pub const graphicalcontext = struct {
             &self.depthimageview,
             depthformat,
             vk.VK_IMAGE_ASPECT_DEPTH_BIT,
+            1,
         );
         try transitionimagelayout(
             self,
@@ -244,6 +247,7 @@ pub const graphicalcontext = struct {
             depthformat,
             vk.VK_IMAGE_LAYOUT_UNDEFINED,
             vk.VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+            1,
         );
     }
 
@@ -289,7 +293,7 @@ pub const graphicalcontext = struct {
         samplercreateinfo.mipmapMode = vk.VK_SAMPLER_MIPMAP_MODE_LINEAR;
         samplercreateinfo.mipLodBias = 0;
         samplercreateinfo.minLod = 0;
-        samplercreateinfo.maxLod = 0;
+        samplercreateinfo.maxLod = @floatFromInt(self.miplevels);
 
         if (vk.vkCreateSampler(self.device, &samplercreateinfo, null, &self.textureimagesampler) != vk.VK_SUCCESS) {
             std.log.err("Unable to Create Image sampler for Texture", .{});
@@ -300,7 +304,7 @@ pub const graphicalcontext = struct {
         vk.vkDestroySampler(self.device, self.textureimagesampler, null);
     }
     fn createtextureimageview(self: *graphicalcontext) !void {
-        try self.createimageview(self.textureimage, &self.textureimageview, vk.VK_FORMAT_R8G8B8A8_SRGB, vk.VK_IMAGE_ASPECT_COLOR_BIT);
+        try self.createimageview(self.textureimage, &self.textureimageview, vk.VK_FORMAT_R8G8B8A8_SRGB, vk.VK_IMAGE_ASPECT_COLOR_BIT, self.miplevels);
     }
     fn destroytextureimageview(self: *graphicalcontext) void {
         self.destroyimageview(self.textureimageview);
@@ -372,7 +376,8 @@ pub const graphicalcontext = struct {
 
         const width = png.png_get_image_width(pngptr, pnginfoptr);
         const height = png.png_get_image_height(pngptr, pnginfoptr);
-        //const rowbytes = png.png_get_rowbytes(pngptr, pnginfoptr);
+
+        self.miplevels = @intFromFloat(std.math.floor(std.math.log2(@as(f32, @floatFromInt(@max(width, height))))));
 
         const pixels: []u8 = try self.allocator.alloc(u8, height * width * 4);
         defer self.allocator.free(pixels);
@@ -407,9 +412,10 @@ pub const graphicalcontext = struct {
             self.device,
             width,
             height,
+            self.miplevels,
             vk.VK_FORMAT_R8G8B8A8_SRGB,
             vk.VK_IMAGE_TILING_OPTIMAL,
-            vk.VK_IMAGE_USAGE_TRANSFER_DST_BIT | vk.VK_IMAGE_USAGE_SAMPLED_BIT,
+            vk.VK_IMAGE_USAGE_TRANSFER_DST_BIT | vk.VK_IMAGE_USAGE_SAMPLED_BIT | vk.VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
             vk.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
             &self.textureimage,
             &self.textureimagememory,
@@ -419,6 +425,7 @@ pub const graphicalcontext = struct {
             vk.VK_FORMAT_R8G8B8A8_SRGB,
             vk.VK_IMAGE_LAYOUT_UNDEFINED,
             vk.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            self.miplevels,
         );
         try self.copybuffertoimage(
             stagingbuffer,
@@ -426,24 +433,139 @@ pub const graphicalcontext = struct {
             width,
             height,
         );
-        try self.transitionimagelayout(
-            self.textureimage,
-            vk.VK_FORMAT_R8G8B8A8_SRGB,
-            vk.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-            vk.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-        );
+
         vk.vkDestroyBuffer(self.device, stagingbuffer, null);
         vk.vkFreeMemory(self.device, stagingbuffermemory, null);
+        try self.generatemipmaps(
+            self.textureimage,
+            vk.VK_FORMAT_R8G8B8A8_SRGB,
+            width,
+            height,
+            self.miplevels,
+        );
     }
     fn destroyimage(self: *graphicalcontext, image: vk.VkImage, imagememory: vk.VkDeviceMemory) void {
         vk.vkDestroyImage(self.device, image, null);
         vk.vkFreeMemory(self.device, imagememory, null);
+    }
+    fn generatemipmaps(self: *graphicalcontext, image: vk.VkImage, imageformat: vk.VkFormat, imgwidth: u32, imgheight: u32, miplevels: u32) !void {
+        var formatproperties: vk.VkFormatProperties = .{};
+        vk.vkGetPhysicalDeviceFormatProperties(self.physicaldevice, imageformat, &formatproperties);
+        if ((formatproperties.optimalTilingFeatures & vk.VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT) == 0) {
+            std.log.err("Minmap generation failed: Device does not suppert linear blitting", .{});
+            return error.MinmapGenerationFailed;
+        }
+        const commandbuffer: vk.VkCommandBuffer = try self.beginsingletimecommands();
+        var mipwidth: i32 = @intCast(imgwidth);
+        var mipheight: i32 = @intCast(imgheight);
+        var barrier: vk.VkImageMemoryBarrier = .{};
+        barrier.sType = vk.VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        barrier.image = image;
+        barrier.srcQueueFamilyIndex = vk.VK_QUEUE_FAMILY_IGNORED;
+        barrier.dstQueueFamilyIndex = vk.VK_QUEUE_FAMILY_IGNORED;
+        barrier.subresourceRange.aspectMask = vk.VK_IMAGE_ASPECT_COLOR_BIT;
+        barrier.subresourceRange.baseArrayLayer = 0;
+        barrier.subresourceRange.levelCount = 1;
+        barrier.subresourceRange.layerCount = 1;
+        for (1..miplevels) |i| {
+            barrier.subresourceRange.baseMipLevel = @intCast(i - 1);
+            barrier.oldLayout = vk.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            barrier.newLayout = vk.VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+            barrier.srcAccessMask = vk.VK_ACCESS_TRANSFER_WRITE_BIT;
+            barrier.dstAccessMask = vk.VK_ACCESS_TRANSFER_READ_BIT;
+
+            vk.vkCmdPipelineBarrier(
+                commandbuffer,
+                vk.VK_PIPELINE_STAGE_TRANSFER_BIT,
+                vk.VK_PIPELINE_STAGE_TRANSFER_BIT,
+                0,
+                0,
+                null,
+                0,
+                null,
+                1,
+                &barrier,
+            );
+
+            var blit: vk.VkImageBlit = .{};
+            blit.srcOffsets[0] = .{ .x = 0, .y = 0, .z = 0 };
+            blit.srcOffsets[1] = .{ .x = mipwidth, .y = mipheight, .z = 1 };
+            blit.srcSubresource.aspectMask = vk.VK_IMAGE_ASPECT_COLOR_BIT;
+            blit.srcSubresource.mipLevel = @intCast(i - 1);
+            blit.srcSubresource.baseArrayLayer = 0;
+            blit.srcSubresource.layerCount = 1;
+            blit.dstOffsets[0] = .{ .x = 0, .y = 0, .z = 0 };
+
+            if (mipwidth > 1) {
+                mipwidth = @divTrunc(mipwidth, 2);
+            } else {
+                mipwidth = 1;
+            }
+            if (mipheight > 1) {
+                mipheight = @divTrunc(mipheight, 2);
+            } else {
+                mipheight = 1;
+            }
+
+            blit.dstOffsets[1] = .{ .x = mipwidth, .y = mipheight, .z = 1 };
+            blit.dstSubresource.aspectMask = vk.VK_IMAGE_ASPECT_COLOR_BIT;
+            blit.dstSubresource.mipLevel = @intCast(i);
+            blit.dstSubresource.baseArrayLayer = 0;
+            blit.dstSubresource.layerCount = 1;
+
+            vk.vkCmdBlitImage(
+                commandbuffer,
+                image,
+                vk.VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                image,
+                vk.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                1,
+                &blit,
+                vk.VK_FILTER_LINEAR,
+            );
+
+            barrier.oldLayout = vk.VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+            barrier.newLayout = vk.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            barrier.srcAccessMask = vk.VK_ACCESS_TRANSFER_READ_BIT;
+            barrier.dstAccessMask = vk.VK_ACCESS_SHADER_READ_BIT;
+            vk.vkCmdPipelineBarrier(
+                commandbuffer,
+                vk.VK_PIPELINE_STAGE_TRANSFER_BIT,
+                vk.VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                0,
+                0,
+                null,
+                0,
+                null,
+                1,
+                &barrier,
+            );
+        }
+        barrier.subresourceRange.baseMipLevel = miplevels - 1;
+        barrier.oldLayout = vk.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        barrier.newLayout = vk.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        barrier.srcAccessMask = vk.VK_ACCESS_TRANSFER_READ_BIT;
+        barrier.dstAccessMask = vk.VK_ACCESS_SHADER_READ_BIT;
+        vk.vkCmdPipelineBarrier(
+            commandbuffer,
+            vk.VK_PIPELINE_STAGE_TRANSFER_BIT,
+            vk.VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+            0,
+            0,
+            null,
+            0,
+            null,
+            1,
+            &barrier,
+        );
+        try self.endsingletimecommands(commandbuffer);
     }
     fn createimage(
         self: *graphicalcontext,
         device: vk.VkDevice,
         width: u32,
         height: u32,
+        miplevels: u32,
         format: vk.VkFormat,
         tiling: vk.VkImageTiling,
         imageusage: vk.VkImageUsageFlags,
@@ -457,7 +579,7 @@ pub const graphicalcontext = struct {
         imagecreateinfo.extent.width = width;
         imagecreateinfo.extent.height = height;
         imagecreateinfo.extent.depth = 1;
-        imagecreateinfo.mipLevels = 1;
+        imagecreateinfo.mipLevels = miplevels;
         imagecreateinfo.arrayLayers = 1;
         imagecreateinfo.format = format;
         imagecreateinfo.tiling = tiling;
@@ -513,7 +635,7 @@ pub const graphicalcontext = struct {
         );
         try self.endsingletimecommands(commandbuffer);
     }
-    fn transitionimagelayout(self: *graphicalcontext, image: vk.VkImage, format: vk.VkFormat, oldlayout: vk.VkImageLayout, newlayout: vk.VkImageLayout) !void {
+    fn transitionimagelayout(self: *graphicalcontext, image: vk.VkImage, format: vk.VkFormat, oldlayout: vk.VkImageLayout, newlayout: vk.VkImageLayout, miplevels: u32) !void {
         const commandbuffer: vk.VkCommandBuffer = try self.beginsingletimecommands();
         var barrier: vk.VkImageMemoryBarrier = .{};
         barrier.sType = vk.VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
@@ -523,7 +645,7 @@ pub const graphicalcontext = struct {
         barrier.dstQueueFamilyIndex = vk.VK_QUEUE_FAMILY_IGNORED;
         barrier.image = image;
         barrier.subresourceRange.baseMipLevel = 0;
-        barrier.subresourceRange.levelCount = 1;
+        barrier.subresourceRange.levelCount = miplevels;
         barrier.subresourceRange.baseArrayLayer = 0;
         barrier.subresourceRange.layerCount = 1;
         if (newlayout == vk.VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL) {
@@ -1230,10 +1352,10 @@ pub const graphicalcontext = struct {
     fn createimageviews(self: *graphicalcontext) !void {
         self.swapchainimageviews = try self.allocator.alloc(vk.VkImageView, self.swapchainimages.len);
         for (0..self.swapchainimageviews.len) |i| {
-            try self.createimageview(self.swapchainimages[i], &self.swapchainimageviews[i], self.swapchainimageformat, vk.VK_IMAGE_ASPECT_COLOR_BIT);
+            try self.createimageview(self.swapchainimages[i], &self.swapchainimageviews[i], self.swapchainimageformat, vk.VK_IMAGE_ASPECT_COLOR_BIT, 1);
         }
     }
-    fn createimageview(self: *graphicalcontext, image: vk.VkImage, imageview: *vk.VkImageView, format: vk.VkFormat, aspectflags: vk.VkImageAspectFlags) !void {
+    fn createimageview(self: *graphicalcontext, image: vk.VkImage, imageview: *vk.VkImageView, format: vk.VkFormat, aspectflags: vk.VkImageAspectFlags, miplevels: u32) !void {
         var createinfo: vk.VkImageViewCreateInfo = .{};
         createinfo.sType = vk.VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
         createinfo.image = image;
@@ -1248,7 +1370,7 @@ pub const graphicalcontext = struct {
 
         createinfo.subresourceRange.aspectMask = aspectflags;
         createinfo.subresourceRange.baseMipLevel = 0;
-        createinfo.subresourceRange.levelCount = 1;
+        createinfo.subresourceRange.levelCount = miplevels;
         createinfo.subresourceRange.baseArrayLayer = 0;
         createinfo.subresourceRange.layerCount = 1;
 

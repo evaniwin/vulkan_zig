@@ -82,12 +82,6 @@ pub const obj = struct {
         for (0..indlen) |i| {
             self.idata[i] = ind[i];
         }
-        for (0..datalen) |i| {
-            std.log.info("coords :{d} {d} {d} texcoord: {d} {d}", .{ self.vdata[i].vertex[0], self.vdata[i].vertex[1], self.vdata[i].vertex[2], self.vdata[i].texcoord[0], self.vdata[i].texcoord[1] });
-        }
-        for (0..indlen) |i| {
-            std.log.info("{d}", .{self.idata[i]});
-        }
     }
     fn populatedata(self: *obj, file: std.fs.File) !void {
         try file.seekTo(0);
