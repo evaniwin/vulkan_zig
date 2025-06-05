@@ -60,6 +60,28 @@ pub const obj = struct {
                 }
             }
         }
+        self.formatdata(data, ind);
+    }
+    fn formatdata(self: *obj, data: [][2]u32, ind: []u32) !void {
+        self.vdata = try self.allocator.alloc(drawing.data, data.len);
+        self.idata = try self.allocator.alloc(u32, ind.len);
+        for (0..data.len) |i| {
+            self.idata[i] = .{
+                .vertex = .{
+                    self.vertices[data[i][0]].coord[0],
+                    self.vertices[data[i][0]].coord[1],
+                    self.vertices[data[i][0]].coord[2],
+                },
+                .color = .{ 0, 0, 0 },
+                .texcoord = .{
+                    self.texcoords[data[i][1]].coord[0],
+                    self.texcoords[data[i][1]].coord[0],
+                },
+            };
+        }
+        for (0..ind.len) |i| {
+            self.idata[i] = ind[i];
+        }
     }
     fn populatedata(self: *obj, file: std.fs.File) !void {
         try file.seekTo(0);
@@ -70,8 +92,9 @@ pub const obj = struct {
         while (true) {
             const line = reader.readUntilDelimiter(&buffer, '\n') catch |err| switch (err) {
                 error.EndOfStream => break,
-                error.StreamTooLong => {
+                error.StreamTooLong => blk: {
                     try reader.skipUntilDelimiterOrEof('\n');
+                    break :blk buffer[0..buffer.len];
                 },
                 else => return err,
             };
@@ -142,10 +165,11 @@ pub const obj = struct {
         self.texcoordsnum = 0;
         self.facesnum = 0;
         while (true) {
-            const line = reader.readUntilDelimiter(&buffer, '\n') catch |err| switch (err) {
+            const line: []u8 = reader.readUntilDelimiter(&buffer, '\n') catch |err| switch (err) {
                 error.EndOfStream => break,
-                error.StreamTooLong => {
+                error.StreamTooLong => blk: {
                     try reader.skipUntilDelimiterOrEof('\n');
+                    break :blk buffer[0..buffer.len];
                 },
                 else => return err,
             };
