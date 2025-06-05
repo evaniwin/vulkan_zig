@@ -55,6 +55,8 @@ pub const graphicalcontext = struct {
     renderfinishedsephamores: []vk.VkSemaphore,
     inflightfences: []vk.VkFence,
     temperorycommandbufferinuse: vk.VkFence,
+    vertices: []drawing.data,
+    indices: []u32,
     pub fn init(allocator: std.mem.Allocator, window: *vk.GLFWwindow) !*graphicalcontext {
         //allocate an instance of this struct
         const self: *graphicalcontext = allocator.create(graphicalcontext) catch |err| {
@@ -73,6 +75,7 @@ pub const graphicalcontext = struct {
         try pickphysicaldevice(self);
         self.queuelist = try graphicsqueue.getqueuefamily(self, self.physicaldevice);
         try createlogicaldevice(self);
+        try loadmodel(self);
         try createswapchain(self, null);
         try getswapchainImages(self);
         try createimageviews(self);
@@ -109,6 +112,7 @@ pub const graphicalcontext = struct {
         destroyimageviews(self);
         destroyswapchainimages(self);
         freeswapchain(self, self.swapchain);
+        freemodeldata(self);
         destroyuniformbuffers(self);
         destroydescriptorpool(self);
         destroydescriptorSets(self);
@@ -169,7 +173,7 @@ pub const graphicalcontext = struct {
         vk.vkCmdBindIndexBuffer(commandbuffer, self.indexbuffer, 0, vk.VK_INDEX_TYPE_UINT32);
         vk.vkCmdBindDescriptorSets(commandbuffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.pipelinelayout, 0, 1, &self.descriptorsets[imageindex], 0, null);
 
-        vk.vkCmdDrawIndexed(commandbuffer, drawing.indices.len, 1, 0, 0, 0);
+        vk.vkCmdDrawIndexed(commandbuffer, @intCast(self.indices.len), 1, 0, 0, 0);
 
         vk.vkCmdEndRenderPass(commandbuffer);
 
@@ -196,6 +200,17 @@ pub const graphicalcontext = struct {
         try createrenderpass(self);
         try createframebuffers(self);
         if (swapchainimageslen != self.swapchainimages.len) @panic("swap chain image length mismatch After Recreation");
+    }
+    fn loadmodel(self: *graphicalcontext) !void {
+        const object = try parseobj.obj.init(self.allocator, "/home/evaniwin/Work/vulkan_zig/resources/teapot.obj");
+        defer object.deinit();
+        try object.processformatdata();
+        self.vertices = object.vdata;
+        self.indices = object.idata;
+    }
+    fn freemodeldata(self: *graphicalcontext) void {
+        self.allocator.free(self.vertices);
+        self.allocator.free(self.indices);
     }
     fn destroydepthresources(self: *graphicalcontext) void {
         vk.vkDestroyImageView(self.device, self.depthimageview, null);
@@ -302,7 +317,7 @@ pub const graphicalcontext = struct {
     }
 
     fn createtextureimage(self: *graphicalcontext) !void {
-        const dir = std.c.fopen("resources/green.png", "rb");
+        const dir = std.c.fopen("/home/evaniwin/Work/vulkan_zig/resources/teapot.png", "rb");
         var errorlibpng: ?u8 = 0;
         if (dir == null) {
             std.log.err("unable to open texture file", .{});
@@ -697,7 +712,7 @@ pub const graphicalcontext = struct {
         self.allocator.free(self.uniformbuffermemotymapped);
     }
     fn createindexbuffer(self: *graphicalcontext) !void {
-        const buffersize = @sizeOf(u32) * drawing.indices.len;
+        const buffersize = @sizeOf(u32) * self.indices.len;
         var stagingbuffer: vk.VkBuffer = undefined;
         var stagingbuffermemory: vk.VkDeviceMemory = undefined;
         try createbuffer(
@@ -712,7 +727,7 @@ pub const graphicalcontext = struct {
         var memdata: ?*anyopaque = undefined;
         _ = vk.vkMapMemory(self.device, stagingbuffermemory, 0, buffersize, 0, &memdata);
         const ptr: [*]u32 = @ptrCast(@alignCast(memdata));
-        std.mem.copyForwards(u32, ptr[0..drawing.indices.len], &drawing.indices);
+        std.mem.copyForwards(u32, ptr[0..self.indices.len], self.indices);
         _ = vk.vkUnmapMemory(self.device, stagingbuffermemory);
 
         try createbuffer(
@@ -796,7 +811,7 @@ pub const graphicalcontext = struct {
         try self.endsingletimecommands(commandbuffer);
     }
     fn createvertexbuffer(self: *graphicalcontext) !void {
-        const buffersize = @sizeOf(drawing.data) * drawing.vertices.len;
+        const buffersize = @sizeOf(drawing.data) * self.vertices.len;
         var stagingbuffer: vk.VkBuffer = undefined;
         var stagingbuffermemory: vk.VkDeviceMemory = undefined;
         try createbuffer(
@@ -811,7 +826,7 @@ pub const graphicalcontext = struct {
         var memdata: ?*anyopaque = undefined;
         _ = vk.vkMapMemory(self.device, stagingbuffermemory, 0, buffersize, 0, &memdata);
         const ptr: [*]drawing.data = @ptrCast(@alignCast(memdata));
-        std.mem.copyForwards(drawing.data, ptr[0..drawing.vertices.len], &drawing.vertices);
+        std.mem.copyForwards(drawing.data, ptr[0..self.vertices.len], self.vertices);
         _ = vk.vkUnmapMemory(self.device, stagingbuffermemory);
 
         try createbuffer(
@@ -1878,6 +1893,7 @@ const png = @cImport({
 const c = @cImport({
     @cInclude("setjmp.h");
 });
+const parseobj = @import("parseobj.zig");
 const drawing = @import("drawing.zig");
 pub const vk = graphics.vk;
 const graphics = @import("graphics.zig");

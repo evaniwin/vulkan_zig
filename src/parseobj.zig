@@ -40,12 +40,12 @@ pub const obj = struct {
         for (0..self.faces.len) |i| {
             for (0..3) |j| {
                 var matchfound = false;
-                for (((i * 3) + j)..0) |k| {
+                for (0..((i * 3) + j)) |k| {
                     //check if there are already existing entries
                     if (data[k][0] == self.faces[i].vert[j]) {
                         if (data[k][1] == self.faces[i].tex[j]) {
                             matchfound = true;
-                            ind[indx] = k;
+                            ind[indx] = @intCast(k);
                             indx = indx + 1;
                             break;
                         }
@@ -54,19 +54,19 @@ pub const obj = struct {
                 if (!matchfound) {
                     //if no match is found create new entry
                     data[dataind] = .{ self.faces[i].vert[j], self.faces[i].tex[j] };
+                    ind[indx] = dataind;
                     dataind = dataind + 1;
-                    ind[indx] = (i * 3) + j;
                     indx = indx + 1;
                 }
             }
         }
-        self.formatdata(data, ind);
+        try self.formatdata(data, dataind, ind, indx);
     }
-    fn formatdata(self: *obj, data: [][2]u32, ind: []u32) !void {
-        self.vdata = try self.allocator.alloc(drawing.data, data.len);
-        self.idata = try self.allocator.alloc(u32, ind.len);
-        for (0..data.len) |i| {
-            self.idata[i] = .{
+    fn formatdata(self: *obj, data: [][2]u32, datalen: u32, ind: []u32, indlen: u32) !void {
+        self.vdata = try self.allocator.alloc(drawing.data, datalen);
+        self.idata = try self.allocator.alloc(u32, indlen);
+        for (0..datalen) |i| {
+            self.vdata[i] = .{
                 .vertex = .{
                     self.vertices[data[i][0]].coord[0],
                     self.vertices[data[i][0]].coord[1],
@@ -79,8 +79,14 @@ pub const obj = struct {
                 },
             };
         }
-        for (0..ind.len) |i| {
+        for (0..indlen) |i| {
             self.idata[i] = ind[i];
+        }
+        for (0..datalen) |i| {
+            std.log.info("coords :{d} {d} {d} texcoord: {d} {d}", .{ self.vdata[i].vertex[0], self.vdata[i].vertex[1], self.vdata[i].vertex[2], self.vdata[i].texcoord[0], self.vdata[i].texcoord[1] });
+        }
+        for (0..indlen) |i| {
+            std.log.info("{d}", .{self.idata[i]});
         }
     }
     fn populatedata(self: *obj, file: std.fs.File) !void {
