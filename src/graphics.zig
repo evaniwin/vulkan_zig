@@ -64,11 +64,12 @@ fn viewportsizeupdate(window: ?*vk.GLFWwindow, vkinstance: *utilty.graphicalcont
         recreateswapchain = false;
     }
 }
+var timer: std.time.Timer = undefined;
 const app_name = "vulkan-zig triangle example";
 pub fn draw() !void {
     std.log.info("render Thread started\n", .{});
     defer std.log.info("render Thread exited\n", .{});
-
+    timer = try std.time.Timer.start();
     if (vk.glfwInit() != vk.GLFW_TRUE) return error.GlfwInitFailed;
     defer vk.glfwTerminate();
 
@@ -187,7 +188,7 @@ fn drawframe(vkinstance: *utilty.graphicalcontext) !void {
 fn updateuniformbuffer(frame: usize, vkinstance: *utilty.graphicalcontext) !void {
     var ubo: drawing.uniformbufferobject = undefined;
     ubo.model = mathmatrix.rotate(
-        @floatCast(std.math.degreesToRadians(cursorpos[0])),
+        @floatCast(std.math.degreesToRadians(@as(f32, @floatFromInt(timer.read())) / 10000000)),
         .{ 0, 0, 1 },
     );
     ubo.view = mathmatrix.lookat(.{ 2, 2, 2 }, .{ 0, 0, 0 }, .{ 0, 0, 1 });

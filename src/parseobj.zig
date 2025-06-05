@@ -6,7 +6,8 @@ pub const obj = struct {
     texcoordsnum: u32,
     faces: []face,
     facesnum: u32,
-
+    vdata: []drawing.data,
+    idata: []u32,
     pub fn init(allocator: std.mem.Allocator, filename: []const u8) !*obj {
         const self = try allocator.create(obj);
         self.allocator = allocator;
@@ -19,9 +20,7 @@ pub const obj = struct {
         self.faces = try self.allocator.alloc(face, self.facesnum);
 
         try self.populatedata(file);
-        //for (0..self.verticesnum / 4) |i| {
-        //    std.log.info("{d} {d} {d}", .{ self.vertices[i].coord[0], self.vertices[i].coord[1], self.vertices[i].coord[2] });
-        //}
+
         return self;
     }
     pub fn deinit(self: *obj) void {
@@ -29,6 +28,38 @@ pub const obj = struct {
         self.allocator.free(self.texcoords);
         self.allocator.free(self.faces);
         self.allocator.destroy(self);
+    }
+    pub fn processformatdata(self: *obj) !void {
+        const data: [][2]u32 = try self.allocator.alloc([2]u32, self.facesnum * 3);
+        defer self.allocator.free(data);
+        var dataind: u32 = 0;
+        const ind: []u32 = try self.allocator.alloc(u32, self.facesnum * 3);
+        defer self.allocator.free(ind);
+        var indx: u32 = 0;
+        //perform vertex buffer de duplication
+        for (0..self.faces.len) |i| {
+            for (0..3) |j| {
+                var matchfound = false;
+                for (((i * 3) + j)..0) |k| {
+                    //check if there are already existing entries
+                    if (data[k][0] == self.faces[i].vert[j]) {
+                        if (data[k][1] == self.faces[i].tex[j]) {
+                            matchfound = true;
+                            ind[indx] = k;
+                            indx = indx + 1;
+                            break;
+                        }
+                    }
+                }
+                if (!matchfound) {
+                    //if no match is found create new entry
+                    data[dataind] = .{ self.faces[i].vert[j], self.faces[i].tex[j] };
+                    dataind = dataind + 1;
+                    ind[indx] = (i * 3) + j;
+                    indx = indx + 1;
+                }
+            }
+        }
     }
     fn populatedata(self: *obj, file: std.fs.File) !void {
         try file.seekTo(0);
@@ -40,20 +71,14 @@ pub const obj = struct {
             const line = reader.readUntilDelimiter(&buffer, '\n') catch |err| switch (err) {
                 error.EndOfStream => break,
                 error.StreamTooLong => {
-                    try longlinehandler(self, file, &buffer, &ind);
-                    continue;
+                    try reader.skipUntilDelimiterOrEof('\n');
                 },
                 else => return err,
             };
             try self.parse(line, &ind);
         }
     }
-    fn longlinehandler(self: *obj, file: std.fs.File, partbuf: []u8, ind: []u32) !void {
-        _ = self;
-        _ = file;
-        _ = partbuf;
-        _ = ind;
-    }
+
     fn parse(self: *obj, line: []u8, ind: []u32) !void {
         var itr = std.mem.tokenizeScalar(u8, line, ' ');
         const first = itr.next().?;
@@ -64,7 +89,8 @@ pub const obj = struct {
                 try std.fmt.parseFloat(f32, itr.next().?),
             };
             ind[0] = ind[0] + 1;
-            if (itr.next() != null) {
+            const ovrflow = itr.next();
+            if (ovrflow != null and ovrflow.?[0] != '#') {
                 std.log.err("Multi dimensional vertices (not 3d) detected parsing terminated : (not supported)", .{});
                 return error.ParsingFailed;
             }
@@ -74,29 +100,40 @@ pub const obj = struct {
                 try std.fmt.parseFloat(f32, itr.next().?),
             };
             ind[1] = ind[1] + 1;
-            if (itr.next() != null) {
+            const ovrflow = itr.next();
+            if (ovrflow != null and ovrflow.?[0] != '#') {
                 std.log.err("Multi dimensional texture coordinates (not 2d) detected parsing terminated : (not supported)", .{});
                 return error.ParsingFailed;
             }
         } else if (std.mem.eql(u8, first, "f")) {
-            var vert = std.mem.tokenizeScalar(u8, itr.next().?, '/');
-            self.faces[ind[2]].vert = .{ try std.fmt.parseUnsigned(u32, vert.next().?, 10), try std.fmt.parseUnsigned(u32, vert.next().?, 10), try std.fmt.parseUnsigned(u32, vert.next().?, 10) };
-            var tex = std.mem.tokenizeScalar(u8, itr.next().?, '/');
-            self.faces[ind[2]].tex = .{ try std.fmt.parseUnsigned(u32, tex.next().?, 10), try std.fmt.parseUnsigned(u32, tex.next().?, 10), try std.fmt.parseUnsigned(u32, tex.next().?, 10) };
-            var nom = std.mem.tokenizeScalar(u8, itr.next().?, '/');
-            self.faces[ind[2]].norm = .{ try std.fmt.parseUnsigned(u32, nom.next().?, 10), try std.fmt.parseUnsigned(u32, nom.next().?, 10), try std.fmt.parseUnsigned(u32, nom.next().?, 10) };
+            var a = std.mem.tokenizeScalar(u8, itr.next().?, '/');
+            var b = std.mem.tokenizeScalar(u8, itr.next().?, '/');
+            var c = std.mem.tokenizeScalar(u8, itr.next().?, '/');
+
+            self.faces[ind[2]].vert = .{
+                try std.fmt.parseUnsigned(u32, a.next().?, 10) - 1,
+                try std.fmt.parseUnsigned(u32, b.next().?, 10) - 1,
+                try std.fmt.parseUnsigned(u32, c.next().?, 10) - 1,
+            };
+            self.faces[ind[2]].tex = .{
+                try std.fmt.parseUnsigned(u32, a.next().?, 10) - 1,
+                try std.fmt.parseUnsigned(u32, b.next().?, 10) - 1,
+                try std.fmt.parseUnsigned(u32, c.next().?, 10) - 1,
+            };
+            self.faces[ind[2]].norm = .{
+                try std.fmt.parseUnsigned(u32, a.next().?, 10) - 1,
+                try std.fmt.parseUnsigned(u32, b.next().?, 10) - 1,
+                try std.fmt.parseUnsigned(u32, c.next().?, 10) - 1,
+            };
             ind[2] = ind[2] + 1;
-            if (itr.next() != null) {
+            const ovrflow = itr.next();
+            if (ovrflow != null and ovrflow.?[0] != '#') {
                 std.log.err("Non triangle face detected parsing terminated : (not supported)", .{});
                 return error.ParsingFailed;
             }
         }
     }
-    fn longlinehandlercount(self: *obj, file: std.fs.File, partbuf: []u8) !void {
-        _ = self;
-        _ = file;
-        _ = partbuf;
-    }
+
     fn countdata(self: *obj, file: std.fs.File) !void {
         var buffer: [1024]u8 = undefined;
         var readerbuf = std.io.bufferedReader(file.reader());
@@ -108,8 +145,7 @@ pub const obj = struct {
             const line = reader.readUntilDelimiter(&buffer, '\n') catch |err| switch (err) {
                 error.EndOfStream => break,
                 error.StreamTooLong => {
-                    try longlinehandlercount(self, file, &buffer);
-                    continue;
+                    try reader.skipUntilDelimiterOrEof('\n');
                 },
                 else => return err,
             };
@@ -131,4 +167,5 @@ const face = struct {
     tex: [3]u32,
     norm: [3]u32,
 };
+const drawing = @import("drawing.zig");
 const std = @import("std");
