@@ -43,6 +43,7 @@ pub const graphicalcontext = struct {
     uniformbuffermemory: []vk.VkDeviceMemory,
     uniformbuffermemotymapped: []?*anyopaque,
     miplevels: u32,
+    msaasamples: vk.VkSampleCountFlagBits = vk.VK_SAMPLE_COUNT_1_BIT,
     textureimage: vk.VkImage,
     textureimagememory: vk.VkDeviceMemory,
     textureimageview: vk.VkImageView,
@@ -50,6 +51,9 @@ pub const graphicalcontext = struct {
     depthimage: vk.VkImage,
     depthimagememory: vk.VkDeviceMemory,
     depthimageview: vk.VkImageView,
+    colorimage: vk.VkImage,
+    colorimagememory: vk.VkDeviceMemory,
+    colorimageview: vk.VkImageView,
 
     instanceextensions: *helper.extensionarray,
     imageavailablesephamores: []vk.VkSemaphore,
@@ -85,6 +89,7 @@ pub const graphicalcontext = struct {
         try createdescriptorsetlayout(self);
         try creategraphicspipeline(self);
         try createcommandpools(self);
+        try createcolorresources(self);
         try createdepthresources(self);
         try createframebuffers(self);
         try createtextureimage(self);
@@ -107,6 +112,7 @@ pub const graphicalcontext = struct {
         destroycommandpools(self);
         destroyframebuffers(self);
         destroydepthresources(self);
+        destroycolorresources(self);
         vk.vkDestroyPipeline(self.device, self.graphicspipeline, null);
         vk.vkDestroyPipelineLayout(self.device, self.pipelinelayout, null);
         vk.vkDestroyRenderPass(self.device, self.renderpass, null);
@@ -144,9 +150,10 @@ pub const graphicalcontext = struct {
         renderpassbegininfo.framebuffer = self.swapchainframebuffers[imageindex];
         renderpassbegininfo.renderArea.offset = .{ .x = 0, .y = 0 };
         renderpassbegininfo.renderArea.extent = self.swapchainextent;
-        var clearcolor: [2]vk.VkClearValue = undefined;
+        var clearcolor: [3]vk.VkClearValue = undefined;
         clearcolor[0].color = vk.VkClearColorValue{ .int32 = .{ 0, 0, 0, 0 } };
         clearcolor[1].depthStencil = vk.VkClearDepthStencilValue{ .depth = 1, .stencil = 0 };
+        clearcolor[2].color = vk.VkClearColorValue{ .int32 = .{ 0, 0, 0, 0 } };
         renderpassbegininfo.clearValueCount = clearcolor.len;
         renderpassbegininfo.pClearValues = &clearcolor[0];
 
@@ -189,6 +196,7 @@ pub const graphicalcontext = struct {
         const swapchainimageslen = self.swapchainimages.len;
         try createswapchain(self, oldswapchain);
         _ = vk.vkDeviceWaitIdle(self.device);
+        destroycolorresources(self);
         destroydepthresources(self);
         destroyswapchainimages(self);
         destroyimageviews(self);
@@ -197,10 +205,39 @@ pub const graphicalcontext = struct {
         freeswapchain(self, oldswapchain);
         try getswapchainImages(self);
         try createimageviews(self);
+        try createcolorresources(self);
         try createdepthresources(self);
         try createrenderpass(self);
         try createframebuffers(self);
         if (swapchainimageslen != self.swapchainimages.len) @panic("swap chain image length mismatch After Recreation");
+    }
+    fn createcolorresources(self: *graphicalcontext) !void {
+        try self.createimage(
+            self.device,
+            self.swapchainextent.width,
+            self.swapchainextent.height,
+            1,
+            self.msaasamples,
+            self.swapchainimageformat,
+            vk.VK_IMAGE_TILING_OPTIMAL,
+            vk.VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT | vk.VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+            vk.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+            &self.colorimage,
+            &self.colorimagememory,
+        );
+        try createimageview(
+            self,
+            self.colorimage,
+            &self.colorimageview,
+            self.swapchainimageformat,
+            vk.VK_IMAGE_ASPECT_COLOR_BIT,
+            1,
+        );
+    }
+    fn destroycolorresources(self: *graphicalcontext) void {
+        vk.vkDestroyImageView(self.device, self.colorimageview, null);
+        vk.vkDestroyImage(self.device, self.colorimage, null);
+        vk.vkFreeMemory(self.device, self.colorimagememory, null);
     }
     fn loadmodel(self: *graphicalcontext) !void {
         const object = try parseobj.obj.init(self.allocator, "/home/evaniwin/Work/vulkan_zig/resources/teapot.obj");
@@ -226,6 +263,7 @@ pub const graphicalcontext = struct {
             self.swapchainextent.width,
             self.swapchainextent.height,
             1,
+            self.msaasamples,
             depthformat,
             vk.VK_IMAGE_TILING_OPTIMAL,
             vk.VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
@@ -413,6 +451,7 @@ pub const graphicalcontext = struct {
             width,
             height,
             self.miplevels,
+            vk.VK_SAMPLE_COUNT_1_BIT,
             vk.VK_FORMAT_R8G8B8A8_SRGB,
             vk.VK_IMAGE_TILING_OPTIMAL,
             vk.VK_IMAGE_USAGE_TRANSFER_DST_BIT | vk.VK_IMAGE_USAGE_SAMPLED_BIT | vk.VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
@@ -566,6 +605,7 @@ pub const graphicalcontext = struct {
         width: u32,
         height: u32,
         miplevels: u32,
+        numsamples: vk.VkSampleCountFlagBits,
         format: vk.VkFormat,
         tiling: vk.VkImageTiling,
         imageusage: vk.VkImageUsageFlags,
@@ -586,7 +626,7 @@ pub const graphicalcontext = struct {
         imagecreateinfo.initialLayout = vk.VK_IMAGE_LAYOUT_UNDEFINED;
         imagecreateinfo.usage = imageusage;
         imagecreateinfo.sharingMode = vk.VK_SHARING_MODE_EXCLUSIVE;
-        imagecreateinfo.samples = vk.VK_SAMPLE_COUNT_1_BIT;
+        imagecreateinfo.samples = numsamples;
         imagecreateinfo.flags = 0;
         if (vk.vkCreateImage(device, &imagecreateinfo, null, image) != vk.VK_SUCCESS) {
             std.log.err("Unable to create Texture Image", .{});
@@ -1106,7 +1146,7 @@ pub const graphicalcontext = struct {
         self.swapchainframebuffers = try self.allocator.alloc(vk.VkFramebuffer, self.swapchainimageviews.len);
 
         for (0..self.swapchainimageviews.len) |i| {
-            var attachments: [2]vk.VkImageView = .{ self.swapchainimageviews[i], self.depthimageview };
+            var attachments: [3]vk.VkImageView = .{ self.colorimageview, self.depthimageview, self.swapchainimageviews[i] };
             var framebuffercreateinfo: vk.VkFramebufferCreateInfo = .{};
             framebuffercreateinfo.sType = vk.VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
             framebuffercreateinfo.renderPass = self.renderpass;
@@ -1124,23 +1164,33 @@ pub const graphicalcontext = struct {
     fn createrenderpass(self: *graphicalcontext) !void {
         var colorattachment: vk.VkAttachmentDescription = .{};
         colorattachment.format = self.swapchainimageformat;
-        colorattachment.samples = vk.VK_SAMPLE_COUNT_1_BIT;
+        colorattachment.samples = self.msaasamples;
         colorattachment.loadOp = vk.VK_ATTACHMENT_LOAD_OP_CLEAR;
         colorattachment.storeOp = vk.VK_ATTACHMENT_STORE_OP_STORE;
         colorattachment.stencilLoadOp = vk.VK_ATTACHMENT_LOAD_OP_DONT_CARE;
         colorattachment.stencilStoreOp = vk.VK_ATTACHMENT_STORE_OP_DONT_CARE;
         colorattachment.initialLayout = vk.VK_IMAGE_LAYOUT_UNDEFINED;
-        colorattachment.finalLayout = vk.VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+        colorattachment.finalLayout = vk.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
 
         var depthattachment: vk.VkAttachmentDescription = .{};
         depthattachment.format = try self.finddepthformat();
-        depthattachment.samples = vk.VK_SAMPLE_COUNT_1_BIT;
+        depthattachment.samples = self.msaasamples;
         depthattachment.loadOp = vk.VK_ATTACHMENT_LOAD_OP_CLEAR;
         depthattachment.storeOp = vk.VK_ATTACHMENT_STORE_OP_DONT_CARE;
         depthattachment.stencilLoadOp = vk.VK_ATTACHMENT_LOAD_OP_DONT_CARE;
         depthattachment.stencilStoreOp = vk.VK_ATTACHMENT_STORE_OP_DONT_CARE;
         depthattachment.initialLayout = vk.VK_IMAGE_LAYOUT_UNDEFINED;
         depthattachment.finalLayout = vk.VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+
+        var colorattachmentresolve: vk.VkAttachmentDescription = .{};
+        colorattachmentresolve.format = self.swapchainimageformat;
+        colorattachmentresolve.samples = vk.VK_SAMPLE_COUNT_1_BIT;
+        colorattachmentresolve.loadOp = vk.VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        colorattachmentresolve.storeOp = vk.VK_ATTACHMENT_STORE_OP_STORE;
+        colorattachmentresolve.stencilLoadOp = vk.VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        colorattachmentresolve.stencilStoreOp = vk.VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        colorattachmentresolve.initialLayout = vk.VK_IMAGE_LAYOUT_UNDEFINED;
+        colorattachmentresolve.finalLayout = vk.VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
 
         var colorattachmentrefrence: vk.VkAttachmentReference = .{};
         colorattachmentrefrence.attachment = 0;
@@ -1150,11 +1200,16 @@ pub const graphicalcontext = struct {
         depthattachmentrefrence.attachment = 1;
         depthattachmentrefrence.layout = vk.VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
 
+        var colorattachmentresolverefrence: vk.VkAttachmentReference = .{};
+        colorattachmentresolverefrence.attachment = 2;
+        colorattachmentresolverefrence.layout = vk.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
         var subpass: vk.VkSubpassDescription = .{};
         subpass.pipelineBindPoint = vk.VK_PIPELINE_BIND_POINT_GRAPHICS;
         subpass.colorAttachmentCount = 1;
         subpass.pColorAttachments = &colorattachmentrefrence;
         subpass.pDepthStencilAttachment = &depthattachmentrefrence;
+        subpass.pResolveAttachments = &colorattachmentresolverefrence;
 
         var subpassdependency: vk.VkSubpassDependency = .{};
         subpassdependency.srcSubpass = vk.VK_SUBPASS_EXTERNAL;
@@ -1164,7 +1219,7 @@ pub const graphicalcontext = struct {
         subpassdependency.dstStageMask = vk.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | vk.VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
         subpassdependency.dstAccessMask = vk.VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | vk.VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
 
-        var attachments: [2]vk.VkAttachmentDescription = .{ colorattachment, depthattachment };
+        var attachments: [3]vk.VkAttachmentDescription = .{ colorattachment, depthattachment, colorattachmentresolve };
         var renderpasscreateinfo: vk.VkRenderPassCreateInfo = .{};
         renderpasscreateinfo.sType = vk.VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
         renderpasscreateinfo.attachmentCount = attachments.len;
@@ -1270,9 +1325,9 @@ pub const graphicalcontext = struct {
 
         var multisampling: vk.VkPipelineMultisampleStateCreateInfo = .{};
         multisampling.sType = vk.VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
-        multisampling.sampleShadingEnable = vk.VK_FALSE;
-        multisampling.rasterizationSamples = vk.VK_SAMPLE_COUNT_1_BIT;
-        multisampling.minSampleShading = 1;
+        multisampling.sampleShadingEnable = self.physicaldevicefeatures.sampleRateShading;
+        multisampling.rasterizationSamples = self.msaasamples;
+        multisampling.minSampleShading = 0.2;
         multisampling.pSampleMask = null;
         multisampling.alphaToCoverageEnable = vk.VK_FALSE;
         multisampling.alphaToOneEnable = vk.VK_FALSE;
@@ -1489,6 +1544,7 @@ pub const graphicalcontext = struct {
         } //specify device features
         var physicaldevicefeatures: vk.VkPhysicalDeviceFeatures = .{};
         physicaldevicefeatures.samplerAnisotropy = self.physicaldevicefeatures.samplerAnisotropy;
+        physicaldevicefeatures.sampleRateShading = self.physicaldevicefeatures.sampleRateShading;
         //creating logicaldevice
         var createinfo: vk.VkDeviceCreateInfo = .{};
         createinfo.sType = vk.VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
@@ -1515,6 +1571,29 @@ pub const graphicalcontext = struct {
     }
     fn destroylogicaldevice(self: *graphicalcontext) void {
         vk.vkDestroyDevice(self.device, null);
+    }
+    fn getmaxusablesamplecount(self: *graphicalcontext) vk.VkSampleCountFlagBits {
+        const counts = self.physicaldeviceproperties.limits.sampledImageColorSampleCounts & self.physicaldeviceproperties.limits.sampledImageDepthSampleCounts;
+        if ((counts & vk.VK_SAMPLE_COUNT_64_BIT) != 0) {
+            return vk.VK_SAMPLE_COUNT_64_BIT;
+        }
+        if ((counts & vk.VK_SAMPLE_COUNT_32_BIT) != 0) {
+            return vk.VK_SAMPLE_COUNT_32_BIT;
+        }
+        if ((counts & vk.VK_SAMPLE_COUNT_16_BIT) != 0) {
+            return vk.VK_SAMPLE_COUNT_16_BIT;
+        }
+        if ((counts & vk.VK_SAMPLE_COUNT_8_BIT) != 0) {
+            return vk.VK_SAMPLE_COUNT_8_BIT;
+        }
+        if ((counts & vk.VK_SAMPLE_COUNT_4_BIT) != 0) {
+            return vk.VK_SAMPLE_COUNT_4_BIT;
+        }
+        if ((counts & vk.VK_SAMPLE_COUNT_2_BIT) != 0) {
+            return vk.VK_SAMPLE_COUNT_2_BIT;
+        }
+
+        return vk.VK_SAMPLE_COUNT_1_BIT;
     }
     fn pickphysicaldevice(self: *graphicalcontext) !void {
         var devicecount: u32 = 0;
@@ -1554,6 +1633,7 @@ pub const graphicalcontext = struct {
             self.physicaldevice = devicelist[topdevice];
             vk.vkGetPhysicalDeviceProperties(self.physicaldevice, &self.physicaldeviceproperties);
             vk.vkGetPhysicalDeviceFeatures(self.physicaldevice, &self.physicaldevicefeatures);
+            self.msaasamples = self.getmaxusablesamplecount();
         }
         if (self.physicaldevice == null) {
             std.log.err("Unable to find suitable Gpu", .{});
