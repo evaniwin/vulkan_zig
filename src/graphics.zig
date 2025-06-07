@@ -108,14 +108,14 @@ pub fn draw() !void {
         windowhandler(window);
         viewportsizeupdate(window, vkinstance);
     }
-    _ = vk.vkDeviceWaitIdle(vkinstance.logicaldevice.device);
+    _ = vk.vkDeviceWaitIdle(vkinstance.device);
 }
 var recreateswapchain: bool = false;
 const MAX_FRAMES_IN_FLIGHT: u32 = 1;
 var currentframe: usize = 0;
 fn drawframe(vkinstance: *utilty.graphicalcontext) !void {
     _ = vk.vkWaitForFences(
-        vkinstance.logicaldevice.device,
+        vkinstance.device,
         1,
         &vkinstance.inflightfences[currentframe],
         vk.VK_TRUE,
@@ -124,7 +124,7 @@ fn drawframe(vkinstance: *utilty.graphicalcontext) !void {
     //TODO The vkAcquireNextImageKHR does not use swapchain image 0 after first loop
     var imageindex: u32 = undefined;
     var result = vk.vkAcquireNextImageKHR(
-        vkinstance.logicaldevice.device,
+        vkinstance.device,
         vkinstance.swapchain,
         std.math.maxInt(u64),
         vkinstance.imageavailablesephamores[currentframe],
@@ -139,7 +139,7 @@ fn drawframe(vkinstance: *utilty.graphicalcontext) !void {
         return;
     }
     try updateuniformbuffer(currentframe, vkinstance);
-    _ = vk.vkResetFences(vkinstance.logicaldevice.device, 1, &vkinstance.inflightfences[currentframe]);
+    _ = vk.vkResetFences(vkinstance.device, 1, &vkinstance.inflightfences[currentframe]);
     _ = vk.vkResetCommandBuffer(vkinstance.commandbuffers[currentframe], 0);
     try vkinstance.recordcommandbuffer(vkinstance.commandbuffers[currentframe], imageindex);
 
@@ -158,7 +158,7 @@ fn drawframe(vkinstance: *utilty.graphicalcontext) !void {
     submitinfo.signalSemaphoreCount = 1;
     submitinfo.pSignalSemaphores = &signalsemaphores[0];
 
-    if (vk.vkQueueSubmit(vkinstance.logicaldevice.graphicsqueue.queue, 1, &submitinfo, vkinstance.inflightfences[currentframe]) != vk.VK_SUCCESS) {
+    if (vk.vkQueueSubmit(vkinstance.graphicsqueue.queue, 1, &submitinfo, vkinstance.inflightfences[currentframe]) != vk.VK_SUCCESS) {
         std.log.err("Unable to Submit Queue", .{});
         return error.QueueSubmissionFailed;
     }
@@ -174,7 +174,7 @@ fn drawframe(vkinstance: *utilty.graphicalcontext) !void {
     presentinfo.pImageIndices = &imageindex;
     presentinfo.pResults = null;
 
-    result = vk.vkQueuePresentKHR(vkinstance.logicaldevice.presentqueue.queue, &presentinfo);
+    result = vk.vkQueuePresentKHR(vkinstance.presentqueue.queue, &presentinfo);
     if (result == vk.VK_ERROR_OUT_OF_DATE_KHR or result != vk.VK_SUBOPTIMAL_KHR) {
         try vkinstance.recreateswapchains();
         return;
