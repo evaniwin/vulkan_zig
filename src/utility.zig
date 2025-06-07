@@ -13,7 +13,6 @@ pub const graphicalcontext = struct {
     physicaldevicefeatures: vk.VkPhysicalDeviceFeatures,
     logicaldevice: *vklogicaldevice.LogicalDevice,
     queuelist: *vklogicaldevice.graphicsqueue,
-    presentqueue: queuestr,
     surface: vk.VkSurfaceKHR,
 
     swapchain: vk.VkSwapchainKHR,
