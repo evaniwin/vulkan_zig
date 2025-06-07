@@ -8,11 +8,10 @@ pub const graphicalcontext = struct {
     allocator: std.mem.Allocator,
     window: *vk.GLFWwindow,
     instance: *vkinstance.Instance,
-    physicaldevice: vk.VkPhysicalDevice,
-    physicaldeviceproperties: vk.VkPhysicalDeviceProperties,
+    physicaldevice: *vkinstance.PhysicalDevice,
     physicaldevicefeatures: vk.VkPhysicalDeviceFeatures,
     device: vk.VkDevice,
-    queuelist: *graphicsqueue,
+    queuelist: *vklogicaldevice.graphicsqueue,
     graphicsqueue: queuestr,
     presentqueue: queuestr,
     surface: vk.VkSurfaceKHR,
@@ -42,7 +41,6 @@ pub const graphicalcontext = struct {
     uniformbuffermemory: []vk.VkDeviceMemory,
     uniformbuffermemotymapped: []?*anyopaque,
     miplevels: u32,
-    msaasamples: vk.VkSampleCountFlagBits = vk.VK_SAMPLE_COUNT_1_BIT,
     textureimage: vk.VkImage,
     textureimagememory: vk.VkDeviceMemory,
     textureimageview: vk.VkImageView,
@@ -54,7 +52,6 @@ pub const graphicalcontext = struct {
     colorimagememory: vk.VkDeviceMemory,
     colorimageview: vk.VkImageView,
 
-    instanceextensions: *helper.extensionarray,
     imageavailablesephamores: []vk.VkSemaphore,
     renderfinishedsephamores: []vk.VkSemaphore,
     inflightfences: []vk.VkFence,
@@ -73,9 +70,15 @@ pub const graphicalcontext = struct {
         errdefer deinit(self);
         //create an vulkan instance
         self.instance = try vkinstance.Instance.createinstance(self.allocator);
+        //create surface associated with glfw window
         try createsurface(self);
-        try pickphysicaldevice(self);
-        self.queuelist = try graphicsqueue.getqueuefamily(self, self.physicaldevice);
+        const physicaldeviceparams: vkinstance.pickphysicaldeviceinfo = .{
+            .allocator = self.allocator,
+            .instance = self.instance,
+            .surface = self.surface,
+        };
+        self.physicaldevice = try vkinstance.PhysicalDevice.getphysicaldevice(physicaldeviceparams);
+        self.queuelist = try vklogicaldevice.graphicsqueue.getqueuefamily(self.allocator, self.physicaldevice.physicaldevice);
         try createlogicaldevice(self);
         try loadmodel(self);
         try createswapchain(self, null);
@@ -101,7 +104,6 @@ pub const graphicalcontext = struct {
         return self;
     }
     pub fn deinit(self: *graphicalcontext) void {
-        self.instanceextensions.free();
         destroysyncobjects(self);
         destroytextureimagesampler(self);
         destroytextureimageview(self);
@@ -125,6 +127,7 @@ pub const graphicalcontext = struct {
         destroyvertexbuffer(self);
         destroylogicaldevice(self);
         vk.vkDestroySurfaceKHR(self.instance.instance, self.surface, null);
+        self.physicaldevice.deinit();
         self.instance.destroyinstance();
         self.allocator.free(self.commandbuffers);
         self.queuelist.deinit();
@@ -213,7 +216,7 @@ pub const graphicalcontext = struct {
             self.swapchainextent.width,
             self.swapchainextent.height,
             1,
-            self.msaasamples,
+            self.physicaldevice.MaxMsaaSamples,
             self.swapchainimageformat,
             vk.VK_IMAGE_TILING_OPTIMAL,
             vk.VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT | vk.VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
@@ -259,7 +262,7 @@ pub const graphicalcontext = struct {
             self.swapchainextent.width,
             self.swapchainextent.height,
             1,
-            self.msaasamples,
+            self.physicaldevice.MaxMsaaSamples,
             depthformat,
             vk.VK_IMAGE_TILING_OPTIMAL,
             vk.VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
@@ -297,7 +300,7 @@ pub const graphicalcontext = struct {
     fn findsupportedformats(self: *graphicalcontext, formatcanadates: []vk.VkFormat, tiling: vk.VkImageTiling, features: vk.VkFormatFeatureFlags) !vk.VkFormat {
         for (formatcanadates) |format| {
             var properties: vk.VkFormatProperties = undefined;
-            vk.vkGetPhysicalDeviceFormatProperties(self.physicaldevice, format, &properties);
+            vk.vkGetPhysicalDeviceFormatProperties(self.physicaldevice.physicaldevice, format, &properties);
             if (tiling == vk.VK_IMAGE_TILING_LINEAR and ((properties.linearTilingFeatures & features) == features)) {
                 return format;
             } else if (tiling == vk.VK_IMAGE_TILING_OPTIMAL and ((properties.optimalTilingFeatures & features) == features)) {
@@ -318,8 +321,8 @@ pub const graphicalcontext = struct {
         samplercreateinfo.addressModeU = vk.VK_SAMPLER_ADDRESS_MODE_REPEAT;
         samplercreateinfo.addressModeV = vk.VK_SAMPLER_ADDRESS_MODE_REPEAT;
         samplercreateinfo.addressModeW = vk.VK_SAMPLER_ADDRESS_MODE_REPEAT;
-        samplercreateinfo.anisotropyEnable = self.physicaldevicefeatures.samplerAnisotropy;
-        samplercreateinfo.maxAnisotropy = self.physicaldeviceproperties.limits.maxSamplerAnisotropy;
+        samplercreateinfo.anisotropyEnable = self.physicaldevice.physicaldevicefeatures.samplerAnisotropy;
+        samplercreateinfo.maxAnisotropy = self.physicaldevice.physicaldeviceproperties.limits.maxSamplerAnisotropy;
         samplercreateinfo.borderColor = vk.VK_BORDER_COLOR_INT_OPAQUE_BLACK;
         samplercreateinfo.unnormalizedCoordinates = vk.VK_FALSE;
         samplercreateinfo.compareEnable = vk.VK_FALSE;
@@ -485,7 +488,7 @@ pub const graphicalcontext = struct {
     }
     fn generatemipmaps(self: *graphicalcontext, image: vk.VkImage, imageformat: vk.VkFormat, imgwidth: u32, imgheight: u32, miplevels: u32) !void {
         var formatproperties: vk.VkFormatProperties = .{};
-        vk.vkGetPhysicalDeviceFormatProperties(self.physicaldevice, imageformat, &formatproperties);
+        vk.vkGetPhysicalDeviceFormatProperties(self.physicaldevice.physicaldevice, imageformat, &formatproperties);
         if ((formatproperties.optimalTilingFeatures & vk.VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT) == 0) {
             std.log.err("Minmap generation failed: Device does not suppert linear blitting", .{});
             return error.MinmapGenerationFailed;
@@ -1041,7 +1044,7 @@ pub const graphicalcontext = struct {
     }
     fn findmemorytype(self: *graphicalcontext, typefilter: u32, properties: vk.VkMemoryPropertyFlags) !u32 {
         var memoryproperties: vk.VkPhysicalDeviceMemoryProperties = undefined;
-        vk.vkGetPhysicalDeviceMemoryProperties(self.physicaldevice, &memoryproperties);
+        vk.vkGetPhysicalDeviceMemoryProperties(self.physicaldevice.physicaldevice, &memoryproperties);
         for (0..memoryproperties.memoryTypeCount) |i| {
             if ((typefilter & (@as(u32, 1) << @as(u5, @intCast(i)))) != 0 and (memoryproperties.memoryTypes[i].propertyFlags & properties) != 0) {
                 return @intCast(i);
@@ -1160,7 +1163,7 @@ pub const graphicalcontext = struct {
     fn createrenderpass(self: *graphicalcontext) !void {
         var colorattachment: vk.VkAttachmentDescription = .{};
         colorattachment.format = self.swapchainimageformat;
-        colorattachment.samples = self.msaasamples;
+        colorattachment.samples = self.physicaldevice.MaxMsaaSamples;
         colorattachment.loadOp = vk.VK_ATTACHMENT_LOAD_OP_CLEAR;
         colorattachment.storeOp = vk.VK_ATTACHMENT_STORE_OP_STORE;
         colorattachment.stencilLoadOp = vk.VK_ATTACHMENT_LOAD_OP_DONT_CARE;
@@ -1170,7 +1173,7 @@ pub const graphicalcontext = struct {
 
         var depthattachment: vk.VkAttachmentDescription = .{};
         depthattachment.format = try self.finddepthformat();
-        depthattachment.samples = self.msaasamples;
+        depthattachment.samples = self.physicaldevice.MaxMsaaSamples;
         depthattachment.loadOp = vk.VK_ATTACHMENT_LOAD_OP_CLEAR;
         depthattachment.storeOp = vk.VK_ATTACHMENT_STORE_OP_DONT_CARE;
         depthattachment.stencilLoadOp = vk.VK_ATTACHMENT_LOAD_OP_DONT_CARE;
@@ -1321,8 +1324,8 @@ pub const graphicalcontext = struct {
 
         var multisampling: vk.VkPipelineMultisampleStateCreateInfo = .{};
         multisampling.sType = vk.VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
-        multisampling.sampleShadingEnable = self.physicaldevicefeatures.sampleRateShading;
-        multisampling.rasterizationSamples = self.msaasamples;
+        multisampling.sampleShadingEnable = self.physicaldevice.physicaldevicefeatures.sampleRateShading;
+        multisampling.rasterizationSamples = self.physicaldevice.MaxMsaaSamples;
         multisampling.minSampleShading = 0.2;
         multisampling.pSampleMask = null;
         multisampling.alphaToCoverageEnable = vk.VK_FALSE;
@@ -1441,12 +1444,16 @@ pub const graphicalcontext = struct {
         vk.vkDestroyImageView(self.device, imageview, null);
     }
     fn createswapchain(self: *graphicalcontext, oldswapchain: vk.VkSwapchainKHR) !void {
-        const swapchainsprt: *swapchainsupport = try swapchainsupport.getSwapchainDetails(self, self.physicaldevice);
+        const swapchainsprt: *vkswapchain.swapchainsupport = try vkswapchain.swapchainsupport.getSwapchainDetails(
+            self.allocator,
+            self.surface,
+            self.physicaldevice.physicaldevice,
+        );
         defer swapchainsprt.deinit();
         const surfaceformat: vk.VkSurfaceFormatKHR = try swapchainsprt.chooseformat();
         self.swapchainimageformat = surfaceformat.format;
         const presentmode: vk.VkPresentModeKHR = swapchainsprt.choosepresentmode();
-        const extent: vk.VkExtent2D = swapchainsprt.chooseswapextent();
+        const extent: vk.VkExtent2D = swapchainsprt.chooseswapextent(self.window);
         self.swapchainextent = extent;
         var imagecount: u32 = swapchainsprt.capabilities.minImageCount + 1;
         if (swapchainsprt.capabilities.maxImageCount > 0 and imagecount > swapchainsprt.capabilities.maxImageCount) {
@@ -1510,7 +1517,7 @@ pub const graphicalcontext = struct {
         const ques1num = self.queuelist.queuesfound;
         const ques1 = try self.allocator.dupe(u32, self.queuelist.searchresult);
         defer self.allocator.free(ques1);
-        self.queuelist.checkpresentCapable(self, self.physicaldevice);
+        self.queuelist.checkpresentCapable(self.surface, self.physicaldevice.physicaldevice);
         const ques2num = self.queuelist.queuesfound;
         const ques2 = try self.allocator.dupe(u32, self.queuelist.searchresult);
         defer self.allocator.free(ques2);
@@ -1539,8 +1546,8 @@ pub const graphicalcontext = struct {
             quecreateinfos[i].pQueuePriorities = &quepriority;
         } //specify device features
         var physicaldevicefeatures: vk.VkPhysicalDeviceFeatures = .{};
-        physicaldevicefeatures.samplerAnisotropy = self.physicaldevicefeatures.samplerAnisotropy;
-        physicaldevicefeatures.sampleRateShading = self.physicaldevicefeatures.sampleRateShading;
+        physicaldevicefeatures.samplerAnisotropy = self.physicaldevice.physicaldevicefeatures.samplerAnisotropy;
+        physicaldevicefeatures.sampleRateShading = self.physicaldevice.physicaldevicefeatures.sampleRateShading;
         //creating logicaldevice
         var createinfo: vk.VkDeviceCreateInfo = .{};
         createinfo.sType = vk.VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
@@ -1556,7 +1563,7 @@ pub const graphicalcontext = struct {
         } else {
             createinfo.enabledLayerCount = 0;
         }
-        if (vk.vkCreateDevice(self.physicaldevice, &createinfo, null, &self.device) != vk.VK_SUCCESS) {
+        if (vk.vkCreateDevice(self.physicaldevice.physicaldevice, &createinfo, null, &self.device) != vk.VK_SUCCESS) {
             std.log.err("unable to create logical device", .{});
             return error.FailedLogicalDeviceCreation;
         }
@@ -1568,281 +1575,11 @@ pub const graphicalcontext = struct {
     fn destroylogicaldevice(self: *graphicalcontext) void {
         vk.vkDestroyDevice(self.device, null);
     }
-    fn getmaxusablesamplecount(self: *graphicalcontext) vk.VkSampleCountFlagBits {
-        const counts = self.physicaldeviceproperties.limits.sampledImageColorSampleCounts & self.physicaldeviceproperties.limits.sampledImageDepthSampleCounts;
-        if ((counts & vk.VK_SAMPLE_COUNT_64_BIT) != 0) {
-            return vk.VK_SAMPLE_COUNT_64_BIT;
-        }
-        if ((counts & vk.VK_SAMPLE_COUNT_32_BIT) != 0) {
-            return vk.VK_SAMPLE_COUNT_32_BIT;
-        }
-        if ((counts & vk.VK_SAMPLE_COUNT_16_BIT) != 0) {
-            return vk.VK_SAMPLE_COUNT_16_BIT;
-        }
-        if ((counts & vk.VK_SAMPLE_COUNT_8_BIT) != 0) {
-            return vk.VK_SAMPLE_COUNT_8_BIT;
-        }
-        if ((counts & vk.VK_SAMPLE_COUNT_4_BIT) != 0) {
-            return vk.VK_SAMPLE_COUNT_4_BIT;
-        }
-        if ((counts & vk.VK_SAMPLE_COUNT_2_BIT) != 0) {
-            return vk.VK_SAMPLE_COUNT_2_BIT;
-        }
-
-        return vk.VK_SAMPLE_COUNT_1_BIT;
-    }
-    fn pickphysicaldevice(self: *graphicalcontext) !void {
-        var devicecount: u32 = 0;
-        _ = vk.vkEnumeratePhysicalDevices(self.instance.instance, &devicecount, null);
-        if (devicecount == 0) {
-            std.log.err("unable to find gpu with vulkan support", .{});
-            return error.UnableToFindGPU;
-        }
-        const devicelist = self.allocator.alloc(vk.VkPhysicalDevice, devicecount) catch |err| {
-            std.log.err("Unable to allocate memory for vulkan device list {s}", .{@errorName(err)});
-            return err;
-        };
-        defer self.allocator.free(devicelist);
-        _ = vk.vkEnumeratePhysicalDevices(self.instance.instance, &devicecount, &devicelist[0]);
-
-        const devicescorelist = self.allocator.alloc(u32, devicecount) catch |err| {
-            std.log.err("Unable to allocate memory for vulkan device score list {s}", .{@errorName(err)});
-            return err;
-        };
-        defer self.allocator.free(devicescorelist);
-
-        self.physicaldevice = null;
-        for (0..devicecount) |i| {
-            std.log.info("checking device information", .{});
-            devicescorelist[i] = try ratedevicecompatability(self, devicelist[i]);
-        }
-        //find best device based on score
-        var topscore: u32 = 0;
-        var topdevice: usize = 0;
-        for (0..devicecount) |i| {
-            if (topscore < devicescorelist[i]) {
-                topscore = devicescorelist[i];
-                topdevice = @intCast(i);
-            }
-        }
-        if (topscore > 0) {
-            self.physicaldevice = devicelist[topdevice];
-            vk.vkGetPhysicalDeviceProperties(self.physicaldevice, &self.physicaldeviceproperties);
-            vk.vkGetPhysicalDeviceFeatures(self.physicaldevice, &self.physicaldevicefeatures);
-            self.msaasamples = self.getmaxusablesamplecount();
-        }
-        if (self.physicaldevice == null) {
-            std.log.err("Unable to find suitable Gpu", .{});
-            return error.UnableToFIndSuitableGPU;
-        }
-    }
-
-    fn ratedevicecompatability(self: *graphicalcontext, device: vk.VkPhysicalDevice) !u32 {
-        var score: u32 = 0;
-        var deviceproperties: vk.VkPhysicalDeviceProperties = .{};
-        var devicefeatures: vk.VkPhysicalDeviceFeatures = .{};
-        vk.vkGetPhysicalDeviceProperties(device, &deviceproperties);
-        vk.vkGetPhysicalDeviceFeatures(device, &devicefeatures);
-
-        //check device properties
-
-        //check device features
-        if (devicefeatures.samplerAnisotropy == vk.VK_TRUE) {
-            score = score + 10;
-        }
-
-        //check extension
-        const devicecompatibility = try checkdeviceextensionsupport(self, device);
-        if (!devicecompatibility) {
-            std.log.warn("Required extensions not found", .{});
-            return 0;
-        }
-
-        //check swapchain
-        const currentswapchain = try swapchainsupport.getSwapchainDetails(self, device);
-        defer currentswapchain.deinit();
-        if (currentswapchain.formatcount == 0 or currentswapchain.presentmodecount == 0) {
-            std.log.warn("NO adecuuate swapchain found for device", .{});
-            return 0;
-        }
-        //score based on available queue families
-        const queuelist = try graphicsqueue.getqueuefamily(self, device);
-        defer queuelist.deinit();
-        queuelist.queueflagsmatch(vk.VK_QUEUE_GRAPHICS_BIT);
-        if (queuelist.queuesfound > 0) score = score + 20;
-        queuelist.queueflagsmatch(vk.VK_QUEUE_COMPUTE_BIT);
-        if (queuelist.queuesfound > 0) score = score + 10;
-        queuelist.queueflagsmatch(vk.VK_QUEUE_TRANSFER_BIT);
-        if (queuelist.queuesfound > 0) score = score + 10;
-        queuelist.queueflagsmatch(vk.VK_QUEUE_SPARSE_BINDING_BIT);
-        if (queuelist.queuesfound > 0) score = score + 10;
-        queuelist.queueflagsmatch(vk.VK_QUEUE_PROTECTED_BIT);
-        if (queuelist.queuesfound > 0) score = score + 10;
-        queuelist.queueflagsmatch(vk.VK_QUEUE_VIDEO_DECODE_BIT_KHR);
-        if (queuelist.queuesfound > 0) score = score + 10;
-        queuelist.queueflagsmatch(vk.VK_QUEUE_VIDEO_ENCODE_BIT_KHR);
-        if (queuelist.queuesfound > 0) score = score + 10;
-        queuelist.queueflagsmatch(vk.VK_QUEUE_OPTICAL_FLOW_BIT_NV);
-        if (queuelist.queuesfound > 0) score = score + 10;
-
-        return score;
-    }
-    fn checkdeviceextensionsupport(self: *graphicalcontext, device: vk.VkPhysicalDevice) !bool {
-        var extensioncount: u32 = 0;
-        _ = vk.vkEnumerateDeviceExtensionProperties(device, null, &extensioncount, null);
-        var extensionproperties = try self.allocator.alloc(vk.VkExtensionProperties, extensioncount);
-        defer self.allocator.free(extensionproperties);
-        _ = vk.vkEnumerateDeviceExtensionProperties(device, null, &extensioncount, &extensionproperties[0]);
-        var requiredestensionsavailable: bool = false;
-        var extensionsfound: u32 = 0;
-        for (0..deviceextensions.len) |i| {
-            requiredestensionsavailable = false;
-            for (0..extensioncount) |j| {
-                if (std.mem.orderZ(u8, deviceextensions[i], @ptrCast(&extensionproperties[j].extensionName)) == .eq) {
-                    requiredestensionsavailable = true;
-                    extensionsfound = extensionsfound + 1;
-                }
-            }
-            if (!requiredestensionsavailable) {
-                std.log.err("Unable to find Required Device Extensions: {s}", .{deviceextensions[i]});
-            }
-        }
-        std.log.info("{d}/{d} Device Extensions found", .{ extensionsfound, deviceextensions.len });
-        if (extensionsfound == deviceextensions.len) {
-            return true;
-        } else {
-            std.log.err("Unable to find Required Device Extensions", .{});
-            return false;
-        }
-    }
 };
-const swapchainsupport = struct {
-    allocator: std.mem.Allocator,
-    capabilities: vk.VkSurfaceCapabilitiesKHR,
-    formatcount: u32,
-    formats: []vk.VkSurfaceFormatKHR,
-    presentmodecount: u32,
-    presentmode: []vk.VkPresentModeKHR,
-    graphicalcontextself: *graphicalcontext,
-    pub fn getSwapchainDetails(graphicalcontextself: *graphicalcontext, device: vk.VkPhysicalDevice) !*swapchainsupport {
-        var self: *swapchainsupport = try graphicalcontextself.allocator.create(swapchainsupport);
-        self.allocator = graphicalcontextself.allocator;
-        self.graphicalcontextself = graphicalcontextself;
-        _ = vk.vkGetPhysicalDeviceSurfaceCapabilitiesKHR(device, graphicalcontextself.surface, &self.capabilities);
-        _ = vk.vkGetPhysicalDeviceSurfaceFormatsKHR(device, graphicalcontextself.surface, &self.formatcount, null);
-        self.formats = try graphicalcontextself.allocator.alloc(vk.VkSurfaceFormatKHR, @max(self.formatcount, 1));
-        _ = vk.vkGetPhysicalDeviceSurfaceFormatsKHR(device, graphicalcontextself.surface, &self.formatcount, &self.formats[0]);
-        _ = vk.vkGetPhysicalDeviceSurfacePresentModesKHR(device, graphicalcontextself.surface, &self.presentmodecount, null);
-        self.presentmode = try graphicalcontextself.allocator.alloc(vk.VkPresentModeKHR, @max(self.presentmodecount, 1));
-        _ = vk.vkGetPhysicalDeviceSurfacePresentModesKHR(device, graphicalcontextself.surface, &self.presentmodecount, &self.presentmode[0]);
-        return self;
-    }
-    pub fn deinit(self: *swapchainsupport) void {
-        self.allocator.free(self.formats);
-        self.allocator.free(self.presentmode);
-        self.allocator.destroy(self);
-    }
-    pub fn chooseformat(self: *swapchainsupport) !vk.VkSurfaceFormatKHR {
-        for (0..self.formatcount) |i| {
-            if (self.formats[i].colorSpace == vk.VK_COLOR_SPACE_SRGB_NONLINEAR_KHR and self.formats[i].format == vk.VK_FORMAT_B8G8R8A8_SRGB) {
-                return self.formats[i];
-            }
-        }
-        return error.UnableTOFindFormats;
-    }
-    pub fn choosepresentmode(self: *swapchainsupport) vk.VkPresentModeKHR {
-        for (0..self.presentmodecount) |i| {
-            if (self.presentmode[i] == vk.VK_PRESENT_MODE_MAILBOX_KHR) {
-                return self.presentmode[i];
-            }
-        }
-        return vk.VK_PRESENT_MODE_FIFO_KHR;
-    }
-    pub fn chooseswapextent(self: *swapchainsupport) vk.VkExtent2D {
-        if (self.capabilities.currentExtent.width != std.math.maxInt(u32)) {
-            return self.capabilities.currentExtent;
-        }
-        var glfwsize: [2]c_int = undefined;
-        vk.glfwGetFramebufferSize(self.graphicalcontextself.window, &glfwsize[0], &glfwsize[1]);
-        var actualextent: vk.VkExtent2D = .{ .width = @intCast(glfwsize[0]), .height = @intCast(glfwsize[1]) };
-        actualextent.width = std.math.clamp(actualextent.width, self.capabilities.minImageExtent.width, self.capabilities.maxImageExtent.width);
-        actualextent.height = std.math.clamp(actualextent.height, self.capabilities.minImageExtent.height, self.capabilities.maxImageExtent.height);
-        return actualextent;
-    }
-};
+
 const queuestr = struct {
     queue: vk.VkQueue,
     familyindex: u32,
-};
-const graphicsqueue = struct {
-    allocator: std.mem.Allocator,
-    availablequeues: u32,
-    queues: []vk.VkQueueFamilyProperties,
-    queuesfound: u32,
-    searchresult: []u32,
-    inUseQueue: []bool,
-    pub fn getqueuefamily(graphicalcontextself: *graphicalcontext, device: vk.VkPhysicalDevice) !*graphicsqueue {
-        var self: *graphicsqueue = try graphicalcontextself.allocator.create(graphicsqueue);
-        self.allocator = graphicalcontextself.allocator;
-        vk.vkGetPhysicalDeviceQueueFamilyProperties(device, &self.availablequeues, null);
-        self.queues = try graphicalcontextself.allocator.alloc(vk.VkQueueFamilyProperties, self.availablequeues);
-        vk.vkGetPhysicalDeviceQueueFamilyProperties(device, &self.availablequeues, self.queues.ptr);
-        self.searchresult = try graphicalcontextself.allocator.alloc(u32, self.availablequeues);
-        self.inUseQueue = try graphicalcontextself.allocator.alloc(bool, self.availablequeues);
-        return self;
-    }
-    pub fn deinit(self: *graphicsqueue) void {
-        self.allocator.free(self.inUseQueue);
-        self.allocator.free(self.searchresult);
-        self.allocator.free(self.queues);
-        self.allocator.destroy(self);
-    }
-    pub fn queueflagsmatch(self: *graphicsqueue, queueFlags: u32) void {
-        var curind: u32 = 0;
-        for (0..self.queues.len) |i| {
-            if ((self.queues[i].queueFlags & queueFlags) == queueFlags) {
-                self.searchresult[curind] = @intCast(i);
-                curind = curind + 1;
-            }
-        }
-        self.queuesfound = curind;
-    }
-    pub fn queueflagsmatchexact(self: *graphicsqueue, queueFlags: u32) void {
-        var curind: u32 = 0;
-        for (0..self.queues.len) |i| {
-            if (self.queues[i].queueFlags == queueFlags) {
-                self.searchresult[curind] = @intCast(i);
-                curind = curind + 1;
-            }
-        }
-        self.queuesfound = curind;
-    }
-    pub fn checkpresentCapable(self: *graphicsqueue, graphicalcontextself: *graphicalcontext, physicaldevice: vk.VkPhysicalDevice) void {
-        var presentsupport: vk.VkBool32 = vk.VK_FALSE;
-        var curind: u32 = 0;
-        for (0..self.queues.len) |i| {
-            _ = vk.vkGetPhysicalDeviceSurfaceSupportKHR(
-                physicaldevice,
-                @intCast(i),
-                graphicalcontextself.surface,
-                &presentsupport,
-            );
-            if (presentsupport == vk.VK_TRUE) {
-                self.searchresult[curind] = @intCast(i);
-                curind = curind + 1;
-            }
-        }
-        self.queuesfound = curind;
-    }
-    pub fn checkifinuse(self: *graphicsqueue, Queue: u32) bool {
-        return self.inUseQueue[Queue];
-    }
-    pub fn markQueueInuse(self: *graphicsqueue, Queue: u32) void {
-        self.inUseQueue[Queue] = true;
-    }
-    pub fn unmarkQueueInuse(self: *graphicsqueue, Queue: u32) void {
-        self.inUseQueue[Queue] = false;
-    }
 };
 
 const vertexbufferconfig = struct {
@@ -1885,6 +1622,8 @@ const drawing = @import("drawing.zig");
 pub const vk = graphics.vk;
 const graphics = @import("graphics.zig");
 const vkinstance = @import("vulkan/instance.zig");
+const vkswapchain = @import("vulkan/swapchain.zig");
+const vklogicaldevice = @import("vulkan/logicaldevice.zig");
 const helper = @import("helpers.zig");
 const main = @import("main.zig");
 const std = @import("std");

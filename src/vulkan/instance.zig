@@ -1,6 +1,9 @@
+//! This file contains Everything needed for vulkan Instance creation and physical device selection
+//! Note:Communication between instances is not possible so try to use 1 instance
 const validationlayers: [1][*c]const u8 = .{"VK_LAYER_KHRONOS_validation"};
 const validationlayerInstanceExtensions: [1][*c]const u8 = .{"VK_EXT_debug_utils"};
 const InstanceExtensions: [0][*c]const u8 = .{};
+const deviceextensions: [1][*c]const u8 = .{"VK_KHR_swapchain"};
 const enablevalidationlayers: bool = true;
 const validationlayerverbose: bool = false;
 pub const Instance = struct {
@@ -50,6 +53,7 @@ pub const Instance = struct {
             std.log.err("error", .{});
             return error.InstanceCreationFailed;
         }
+        try self.createdebugmessanger();
         return self;
     }
     pub fn destroyinstance(self: *Instance) void {
@@ -225,8 +229,178 @@ export fn debugCallback(
     }
     return vk.VK_FALSE;
 }
+pub const pickphysicaldeviceinfo = struct {
+    allocator: std.mem.Allocator,
+    instance: *Instance,
+    surface: vk.VkSurfaceKHR,
+};
+pub const PhysicalDevice = struct {
+    allocator: std.mem.Allocator,
+    instance: vk.VkInstance,
+    physicaldevice: vk.VkPhysicalDevice,
+    physicaldeviceproperties: vk.VkPhysicalDeviceProperties,
+    physicaldevicefeatures: vk.VkPhysicalDeviceFeatures,
+    MaxMsaaSamples: vk.VkSampleCountFlagBits,
+
+    pub fn getphysicaldevice(pickphysicaldeviceparams: pickphysicaldeviceinfo) !*PhysicalDevice {
+        var self: *PhysicalDevice = try pickphysicaldeviceparams.allocator.create(PhysicalDevice);
+        self.allocator = pickphysicaldeviceparams.allocator;
+        self.instance = pickphysicaldeviceparams.instance.instance;
+
+        var devicecount: u32 = 0;
+        _ = vk.vkEnumeratePhysicalDevices(self.instance, &devicecount, null);
+        if (devicecount == 0) {
+            std.log.err("unable to find gpu with vulkan support", .{});
+            return error.UnableToFindGPU;
+        }
+        const devicelist = self.allocator.alloc(vk.VkPhysicalDevice, devicecount) catch |err| {
+            std.log.err("Unable to allocate memory for vulkan device list {s}", .{@errorName(err)});
+            return err;
+        };
+        defer self.allocator.free(devicelist);
+        _ = vk.vkEnumeratePhysicalDevices(self.instance, &devicecount, &devicelist[0]);
+
+        const devicescorelist = self.allocator.alloc(u32, devicecount) catch |err| {
+            std.log.err("Unable to allocate memory for vulkan device score list {s}", .{@errorName(err)});
+            return err;
+        };
+        defer self.allocator.free(devicescorelist);
+
+        self.physicaldevice = null;
+        for (0..devicecount) |i| {
+            std.log.info("checking device information", .{});
+            devicescorelist[i] = try ratedevicecompatability(self, devicelist[i], pickphysicaldeviceparams);
+        }
+        //find best device based on score
+        var topscore: u32 = 0;
+        var topdevice: usize = 0;
+        for (0..devicecount) |i| {
+            if (topscore < devicescorelist[i]) {
+                topscore = devicescorelist[i];
+                topdevice = @intCast(i);
+            }
+        }
+        if (topscore > 0) {
+            self.physicaldevice = devicelist[topdevice];
+            vk.vkGetPhysicalDeviceProperties(self.physicaldevice, &self.physicaldeviceproperties);
+            vk.vkGetPhysicalDeviceFeatures(self.physicaldevice, &self.physicaldevicefeatures);
+            self.MaxMsaaSamples = self.getmaxusablesamplecount();
+        }
+        if (self.physicaldevice == null) {
+            std.log.err("Unable to find suitable Gpu", .{});
+            return error.UnableToFIndSuitableGPU;
+        }
+        return self;
+    }
+    pub fn deinit(self: *PhysicalDevice) void {
+        self.allocator.destroy(self);
+    }
+    fn ratedevicecompatability(self: *PhysicalDevice, device: vk.VkPhysicalDevice, pickphysicaldeviceparams: pickphysicaldeviceinfo) !u32 {
+        var score: u32 = 0;
+        var deviceproperties: vk.VkPhysicalDeviceProperties = .{};
+        var devicefeatures: vk.VkPhysicalDeviceFeatures = .{};
+        vk.vkGetPhysicalDeviceProperties(device, &deviceproperties);
+        vk.vkGetPhysicalDeviceFeatures(device, &devicefeatures);
+
+        //check device properties
+
+        //check device features
+        if (devicefeatures.samplerAnisotropy == vk.VK_TRUE) {
+            score = score + 10;
+        }
+
+        //check extension
+        const devicecompatibility = try checkdeviceextensionsupport(self, device);
+        if (!devicecompatibility) {
+            std.log.warn("Required extensions not found", .{});
+            return 0;
+        }
+
+        //check swapchain
+        const currentswapchain = try vkswapchain.swapchainsupport.getSwapchainDetails(self.allocator, pickphysicaldeviceparams.surface, device);
+        defer currentswapchain.deinit();
+        if (currentswapchain.formatcount == 0 or currentswapchain.presentmodecount == 0) {
+            std.log.warn("NO adecuuate swapchain found for device", .{});
+            return 0;
+        }
+        //score based on available queue families
+        const queuelist = try vklogicaldevice.graphicsqueue.getqueuefamily(self.allocator, device);
+        defer queuelist.deinit();
+        queuelist.queueflagsmatch(vk.VK_QUEUE_GRAPHICS_BIT);
+        if (queuelist.queuesfound > 0) score = score + 20;
+        queuelist.queueflagsmatch(vk.VK_QUEUE_COMPUTE_BIT);
+        if (queuelist.queuesfound > 0) score = score + 10;
+        queuelist.queueflagsmatch(vk.VK_QUEUE_TRANSFER_BIT);
+        if (queuelist.queuesfound > 0) score = score + 10;
+        queuelist.queueflagsmatch(vk.VK_QUEUE_SPARSE_BINDING_BIT);
+        if (queuelist.queuesfound > 0) score = score + 10;
+        queuelist.queueflagsmatch(vk.VK_QUEUE_PROTECTED_BIT);
+        if (queuelist.queuesfound > 0) score = score + 10;
+        queuelist.queueflagsmatch(vk.VK_QUEUE_VIDEO_DECODE_BIT_KHR);
+        if (queuelist.queuesfound > 0) score = score + 10;
+        queuelist.queueflagsmatch(vk.VK_QUEUE_VIDEO_ENCODE_BIT_KHR);
+        if (queuelist.queuesfound > 0) score = score + 10;
+        queuelist.queueflagsmatch(vk.VK_QUEUE_OPTICAL_FLOW_BIT_NV);
+        if (queuelist.queuesfound > 0) score = score + 10;
+
+        return score;
+    }
+    fn checkdeviceextensionsupport(self: *PhysicalDevice, device: vk.VkPhysicalDevice) !bool {
+        var extensioncount: u32 = 0;
+        _ = vk.vkEnumerateDeviceExtensionProperties(device, null, &extensioncount, null);
+        var extensionproperties = try self.allocator.alloc(vk.VkExtensionProperties, extensioncount);
+        defer self.allocator.free(extensionproperties);
+        _ = vk.vkEnumerateDeviceExtensionProperties(device, null, &extensioncount, &extensionproperties[0]);
+        var requiredestensionsavailable: bool = false;
+        var extensionsfound: u32 = 0;
+        for (0..deviceextensions.len) |i| {
+            requiredestensionsavailable = false;
+            for (0..extensioncount) |j| {
+                if (std.mem.orderZ(u8, deviceextensions[i], @ptrCast(&extensionproperties[j].extensionName)) == .eq) {
+                    requiredestensionsavailable = true;
+                    extensionsfound = extensionsfound + 1;
+                }
+            }
+            if (!requiredestensionsavailable) {
+                std.log.err("Unable to find Required Device Extensions: {s}", .{deviceextensions[i]});
+            }
+        }
+        std.log.info("{d}/{d} Device Extensions found", .{ extensionsfound, deviceextensions.len });
+        if (extensionsfound == deviceextensions.len) {
+            return true;
+        } else {
+            std.log.err("Unable to find Required Device Extensions", .{});
+            return false;
+        }
+    }
+    fn getmaxusablesamplecount(self: *PhysicalDevice) vk.VkSampleCountFlagBits {
+        const counts = self.physicaldeviceproperties.limits.sampledImageColorSampleCounts & self.physicaldeviceproperties.limits.sampledImageDepthSampleCounts;
+        if ((counts & vk.VK_SAMPLE_COUNT_64_BIT) != 0) {
+            return vk.VK_SAMPLE_COUNT_64_BIT;
+        }
+        if ((counts & vk.VK_SAMPLE_COUNT_32_BIT) != 0) {
+            return vk.VK_SAMPLE_COUNT_32_BIT;
+        }
+        if ((counts & vk.VK_SAMPLE_COUNT_16_BIT) != 0) {
+            return vk.VK_SAMPLE_COUNT_16_BIT;
+        }
+        if ((counts & vk.VK_SAMPLE_COUNT_8_BIT) != 0) {
+            return vk.VK_SAMPLE_COUNT_8_BIT;
+        }
+        if ((counts & vk.VK_SAMPLE_COUNT_4_BIT) != 0) {
+            return vk.VK_SAMPLE_COUNT_4_BIT;
+        }
+        if ((counts & vk.VK_SAMPLE_COUNT_2_BIT) != 0) {
+            return vk.VK_SAMPLE_COUNT_2_BIT;
+        }
+
+        return vk.VK_SAMPLE_COUNT_1_BIT;
+    }
+};
 
 pub const vk = graphics.vk;
 const graphics = @import("../graphics.zig");
+const vkswapchain = @import("swapchain.zig");
+const vklogicaldevice = @import("logicaldevice.zig");
 const main = @import("../main.zig");
 const std = @import("std");
