@@ -1,6 +1,5 @@
-var validationlayers: [1][*c]const u8 = .{"VK_LAYER_KHRONOS_validation"};
-var validationlayerInstanceExtensions: [1][*c]const u8 = .{"VK_EXT_debug_utils"};
-var deviceextensions: [1][*c]const u8 = .{"VK_KHR_swapchain"};
+const validationlayers: [1][*c]const u8 = .{"VK_LAYER_KHRONOS_validation"};
+const deviceextensions: [1][*c]const u8 = .{"VK_KHR_swapchain"};
 const enablevalidationlayers: bool = true;
 const validationlayerverbose: bool = false;
 const triangle_frag = @embedFile("spirv/triangle_frag.spv");
@@ -11,8 +10,9 @@ pub const graphicalcontext = struct {
     instance: *vkinstance.Instance,
     physicaldevice: *vkinstance.PhysicalDevice,
     physicaldevicefeatures: vk.VkPhysicalDeviceFeatures,
-    logicaldevice: *vklogicaldevice.LogicalDevice,
+    device: vk.VkDevice,
     queuelist: *vklogicaldevice.graphicsqueue,
+    graphicsqueue: queuestr,
     presentqueue: queuestr,
     surface: vk.VkSurfaceKHR,
 
@@ -69,35 +69,17 @@ pub const graphicalcontext = struct {
         //TODO
         errdefer deinit(self);
         //create an vulkan instance
-        const instanceparams: vkinstance.instancecreateinfo = .{
-            .allocator = self.allocator,
-            .InstanceExtensions = &[0][*c]const u8{},
-            .validationlayers = &validationlayers,
-            .validationlayerInstanceExtensions = &validationlayerInstanceExtensions,
-            .enablevalidationlayers = true,
-        };
-        self.instance = try vkinstance.Instance.createinstance(instanceparams);
+        self.instance = try vkinstance.Instance.createinstance(self.allocator);
         //create surface associated with glfw window
-        try createsurface(self.instance.instance, self.window, &self.surface);
-        //get physical device with given params
+        try createsurface(self);
         const physicaldeviceparams: vkinstance.pickphysicaldeviceinfo = .{
             .allocator = self.allocator,
             .instance = self.instance,
             .surface = self.surface,
-            .deviceextensions = &deviceextensions,
         };
         self.physicaldevice = try vkinstance.PhysicalDevice.getphysicaldevice(physicaldeviceparams);
         self.queuelist = try vklogicaldevice.graphicsqueue.getqueuefamily(self.allocator, self.physicaldevice.physicaldevice);
-        const logicaldeviceparams: vklogicaldevice.logicaldeviccecreateinfo = .{
-            .allocator = self.allocator,
-            .deviceextensions = &deviceextensions,
-            .queuelist = self.queuelist,
-            .surface = self.surface,
-            .physicaldevice = self.physicaldevice,
-            .enablevalidationlayers = true,
-            .validationlayers = &validationlayers,
-        };
-        self.logicaldevice = try vklogicaldevice.LogicalDevice.createlogicaldevice(logicaldeviceparams);
+        try createlogicaldevice(self);
         try loadmodel(self);
         try createswapchain(self, null);
         try getswapchainImages(self);
@@ -130,9 +112,9 @@ pub const graphicalcontext = struct {
         destroyframebuffers(self);
         destroydepthresources(self);
         destroycolorresources(self);
-        vk.vkDestroyPipeline(self.logicaldevice.device, self.graphicspipeline, null);
-        vk.vkDestroyPipelineLayout(self.logicaldevice.device, self.pipelinelayout, null);
-        vk.vkDestroyRenderPass(self.logicaldevice.device, self.renderpass, null);
+        vk.vkDestroyPipeline(self.device, self.graphicspipeline, null);
+        vk.vkDestroyPipelineLayout(self.device, self.pipelinelayout, null);
+        vk.vkDestroyRenderPass(self.device, self.renderpass, null);
         destroyimageviews(self);
         destroyswapchainimages(self);
         freeswapchain(self, self.swapchain);
@@ -143,7 +125,7 @@ pub const graphicalcontext = struct {
         destroydescriptorsetlayout(self);
         destroyindexbuffer(self);
         destroyvertexbuffer(self);
-        self.logicaldevice.destroylogicaldevice();
+        destroylogicaldevice(self);
         vk.vkDestroySurfaceKHR(self.instance.instance, self.surface, null);
         self.physicaldevice.deinit();
         self.instance.destroyinstance();
@@ -212,12 +194,12 @@ pub const graphicalcontext = struct {
         const oldswapchain: vk.VkSwapchainKHR = self.swapchain;
         const swapchainimageslen = self.swapchainimages.len;
         try createswapchain(self, oldswapchain);
-        _ = vk.vkDeviceWaitIdle(self.logicaldevice.device);
+        _ = vk.vkDeviceWaitIdle(self.device);
         destroycolorresources(self);
         destroydepthresources(self);
         destroyswapchainimages(self);
         destroyimageviews(self);
-        vk.vkDestroyRenderPass(self.logicaldevice.device, self.renderpass, null);
+        vk.vkDestroyRenderPass(self.device, self.renderpass, null);
         destroyframebuffers(self);
         freeswapchain(self, oldswapchain);
         try getswapchainImages(self);
@@ -230,7 +212,7 @@ pub const graphicalcontext = struct {
     }
     fn createcolorresources(self: *graphicalcontext) !void {
         try self.createimage(
-            self.logicaldevice.device,
+            self.device,
             self.swapchainextent.width,
             self.swapchainextent.height,
             1,
@@ -252,9 +234,9 @@ pub const graphicalcontext = struct {
         );
     }
     fn destroycolorresources(self: *graphicalcontext) void {
-        vk.vkDestroyImageView(self.logicaldevice.device, self.colorimageview, null);
-        vk.vkDestroyImage(self.logicaldevice.device, self.colorimage, null);
-        vk.vkFreeMemory(self.logicaldevice.device, self.colorimagememory, null);
+        vk.vkDestroyImageView(self.device, self.colorimageview, null);
+        vk.vkDestroyImage(self.device, self.colorimage, null);
+        vk.vkFreeMemory(self.device, self.colorimagememory, null);
     }
     fn loadmodel(self: *graphicalcontext) !void {
         const object = try parseobj.obj.init(self.allocator, "/home/evaniwin/Work/vulkan_zig/resources/teapot.obj");
@@ -268,15 +250,15 @@ pub const graphicalcontext = struct {
         self.allocator.free(self.indices);
     }
     fn destroydepthresources(self: *graphicalcontext) void {
-        vk.vkDestroyImageView(self.logicaldevice.device, self.depthimageview, null);
-        vk.vkDestroyImage(self.logicaldevice.device, self.depthimage, null);
-        vk.vkFreeMemory(self.logicaldevice.device, self.depthimagememory, null);
+        vk.vkDestroyImageView(self.device, self.depthimageview, null);
+        vk.vkDestroyImage(self.device, self.depthimage, null);
+        vk.vkFreeMemory(self.device, self.depthimagememory, null);
     }
     fn createdepthresources(self: *graphicalcontext) !void {
         const depthformat: vk.VkFormat = try self.finddepthformat();
         try createimage(
             self,
-            self.logicaldevice.device,
+            self.device,
             self.swapchainextent.width,
             self.swapchainextent.height,
             1,
@@ -350,13 +332,13 @@ pub const graphicalcontext = struct {
         samplercreateinfo.minLod = 0;
         samplercreateinfo.maxLod = @floatFromInt(self.miplevels);
 
-        if (vk.vkCreateSampler(self.logicaldevice.device, &samplercreateinfo, null, &self.textureimagesampler) != vk.VK_SUCCESS) {
+        if (vk.vkCreateSampler(self.device, &samplercreateinfo, null, &self.textureimagesampler) != vk.VK_SUCCESS) {
             std.log.err("Unable to Create Image sampler for Texture", .{});
             return error.FailedToCreateTextureImageSampler;
         }
     }
     fn destroytextureimagesampler(self: *graphicalcontext) void {
-        vk.vkDestroySampler(self.logicaldevice.device, self.textureimagesampler, null);
+        vk.vkDestroySampler(self.device, self.textureimagesampler, null);
     }
     fn createtextureimageview(self: *graphicalcontext) !void {
         try self.createimageview(self.textureimage, &self.textureimageview, vk.VK_FORMAT_R8G8B8A8_SRGB, vk.VK_IMAGE_ASPECT_COLOR_BIT, self.miplevels);
@@ -457,14 +439,14 @@ pub const graphicalcontext = struct {
         );
 
         var memdata: ?*anyopaque = undefined;
-        _ = vk.vkMapMemory(self.logicaldevice.device, stagingbuffermemory, 0, imagesize, 0, &memdata);
+        _ = vk.vkMapMemory(self.device, stagingbuffermemory, 0, imagesize, 0, &memdata);
         const ptr: [*]u8 = @ptrCast(@alignCast(memdata));
         std.mem.copyForwards(u8, ptr[0..pixels.len], pixels);
-        _ = vk.vkUnmapMemory(self.logicaldevice.device, stagingbuffermemory);
+        _ = vk.vkUnmapMemory(self.device, stagingbuffermemory);
 
         try createimage(
             self,
-            self.logicaldevice.device,
+            self.device,
             width,
             height,
             self.miplevels,
@@ -490,8 +472,8 @@ pub const graphicalcontext = struct {
             height,
         );
 
-        vk.vkDestroyBuffer(self.logicaldevice.device, stagingbuffer, null);
-        vk.vkFreeMemory(self.logicaldevice.device, stagingbuffermemory, null);
+        vk.vkDestroyBuffer(self.device, stagingbuffer, null);
+        vk.vkFreeMemory(self.device, stagingbuffermemory, null);
         try self.generatemipmaps(
             self.textureimage,
             vk.VK_FORMAT_R8G8B8A8_SRGB,
@@ -501,8 +483,8 @@ pub const graphicalcontext = struct {
         );
     }
     fn destroyimage(self: *graphicalcontext, image: vk.VkImage, imagememory: vk.VkDeviceMemory) void {
-        vk.vkDestroyImage(self.logicaldevice.device, image, null);
-        vk.vkFreeMemory(self.logicaldevice.device, imagememory, null);
+        vk.vkDestroyImage(self.device, image, null);
+        vk.vkFreeMemory(self.device, imagememory, null);
     }
     fn generatemipmaps(self: *graphicalcontext, image: vk.VkImage, imageformat: vk.VkFormat, imgwidth: u32, imgheight: u32, miplevels: u32) !void {
         var formatproperties: vk.VkFormatProperties = .{};
@@ -768,13 +750,13 @@ pub const graphicalcontext = struct {
         poolcreateinfo.pPoolSizes = &descriptorpoolsizes[0];
         poolcreateinfo.maxSets = @intCast(self.swapchainimages.len);
 
-        if (vk.vkCreateDescriptorPool(self.logicaldevice.device, &poolcreateinfo, null, &self.descriptorpool) != vk.VK_SUCCESS) {
+        if (vk.vkCreateDescriptorPool(self.device, &poolcreateinfo, null, &self.descriptorpool) != vk.VK_SUCCESS) {
             std.log.err("Unable to create Descriptor Pool", .{});
             return error.FailedToCreateDescriptorPool;
         }
     }
     fn destroydescriptorpool(self: *graphicalcontext) void {
-        vk.vkDestroyDescriptorPool(self.logicaldevice.device, self.descriptorpool, null);
+        vk.vkDestroyDescriptorPool(self.device, self.descriptorpool, null);
     }
     fn createdescriptorSets(self: *graphicalcontext) !void {
         var descriptorsetlayouts: []vk.VkDescriptorSetLayout = try self.allocator.alloc(vk.VkDescriptorSetLayout, self.swapchainimages.len);
@@ -790,7 +772,7 @@ pub const graphicalcontext = struct {
         descriptorsetallocinfo.descriptorSetCount = @intCast(self.swapchainimages.len);
         descriptorsetallocinfo.pSetLayouts = &descriptorsetlayouts[0];
 
-        if (vk.vkAllocateDescriptorSets(self.logicaldevice.device, &descriptorsetallocinfo, &self.descriptorsets[0]) != vk.VK_SUCCESS) {
+        if (vk.vkAllocateDescriptorSets(self.device, &descriptorsetallocinfo, &self.descriptorsets[0]) != vk.VK_SUCCESS) {
             std.log.err("Unable to create Descriptor Sets", .{});
             return error.FailedToCreateDescriptorSets;
         }
@@ -828,7 +810,7 @@ pub const graphicalcontext = struct {
             writedescriptorset[1].pTexelBufferView = null;
             writedescriptorset[1].pNext = null;
 
-            vk.vkUpdateDescriptorSets(self.logicaldevice.device, writedescriptorset.len, &writedescriptorset[0], 0, null);
+            vk.vkUpdateDescriptorSets(self.device, writedescriptorset.len, &writedescriptorset[0], 0, null);
         }
     }
     fn destroydescriptorSets(self: *graphicalcontext) void {
@@ -855,13 +837,13 @@ pub const graphicalcontext = struct {
         layoutcreateinfo.bindingCount = @intCast(bindings.len);
         layoutcreateinfo.pBindings = &bindings[0];
 
-        if (vk.vkCreateDescriptorSetLayout(self.logicaldevice.device, &layoutcreateinfo, null, &self.descriptorsetlayout) != vk.VK_SUCCESS) {
+        if (vk.vkCreateDescriptorSetLayout(self.device, &layoutcreateinfo, null, &self.descriptorsetlayout) != vk.VK_SUCCESS) {
             std.log.err("Unable to create Descriptor Set Layout", .{});
             return error.FailedToCreateDescriptorSetLayout;
         }
     }
     fn destroydescriptorsetlayout(self: *graphicalcontext) void {
-        vk.vkDestroyDescriptorSetLayout(self.logicaldevice.device, self.descriptorsetlayout, null);
+        vk.vkDestroyDescriptorSetLayout(self.device, self.descriptorsetlayout, null);
     }
     fn createuniformbuffers(self: *graphicalcontext) !void {
         const buffersize = @sizeOf(drawing.uniformbufferobject);
@@ -878,13 +860,13 @@ pub const graphicalcontext = struct {
                 &self.uniformbuffer[i],
                 &self.uniformbuffermemory[i],
             );
-            _ = vk.vkMapMemory(self.logicaldevice.device, self.uniformbuffermemory[i], 0, buffersize, 0, &self.uniformbuffermemotymapped[i]);
+            _ = vk.vkMapMemory(self.device, self.uniformbuffermemory[i], 0, buffersize, 0, &self.uniformbuffermemotymapped[i]);
         }
     }
     fn destroyuniformbuffers(self: *graphicalcontext) void {
         for (0..self.uniformbuffer.len) |i| {
-            vk.vkDestroyBuffer(self.logicaldevice.device, self.uniformbuffer[i], null);
-            vk.vkFreeMemory(self.logicaldevice.device, self.uniformbuffermemory[i], null);
+            vk.vkDestroyBuffer(self.device, self.uniformbuffer[i], null);
+            vk.vkFreeMemory(self.device, self.uniformbuffermemory[i], null);
         }
         self.allocator.free(self.uniformbuffer);
         self.allocator.free(self.uniformbuffermemory);
@@ -904,10 +886,10 @@ pub const graphicalcontext = struct {
         );
 
         var memdata: ?*anyopaque = undefined;
-        _ = vk.vkMapMemory(self.logicaldevice.device, stagingbuffermemory, 0, buffersize, 0, &memdata);
+        _ = vk.vkMapMemory(self.device, stagingbuffermemory, 0, buffersize, 0, &memdata);
         const ptr: [*]u32 = @ptrCast(@alignCast(memdata));
         std.mem.copyForwards(u32, ptr[0..self.indices.len], self.indices);
-        _ = vk.vkUnmapMemory(self.logicaldevice.device, stagingbuffermemory);
+        _ = vk.vkUnmapMemory(self.device, stagingbuffermemory);
 
         try createbuffer(
             self,
@@ -918,22 +900,22 @@ pub const graphicalcontext = struct {
             &self.indexbuffermemory,
         );
         try copybuffer(self, stagingbuffer, self.indexbuffer, buffersize);
-        vk.vkDestroyBuffer(self.logicaldevice.device, stagingbuffer, null);
-        vk.vkFreeMemory(self.logicaldevice.device, stagingbuffermemory, null);
+        vk.vkDestroyBuffer(self.device, stagingbuffer, null);
+        vk.vkFreeMemory(self.device, stagingbuffermemory, null);
     }
     fn destroyindexbuffer(self: *graphicalcontext) void {
-        vk.vkDestroyBuffer(self.logicaldevice.device, self.indexbuffer, null);
-        vk.vkFreeMemory(self.logicaldevice.device, self.indexbuffermemory, null);
+        vk.vkDestroyBuffer(self.device, self.indexbuffer, null);
+        vk.vkFreeMemory(self.device, self.indexbuffermemory, null);
     }
     fn beginsingletimecommands(self: *graphicalcontext) !vk.VkCommandBuffer {
         _ = vk.vkWaitForFences(
-            self.logicaldevice.device,
+            self.device,
             1,
             &self.temperorycommandbufferinuse,
             vk.VK_TRUE,
             std.math.maxInt(u64),
         );
-        _ = vk.vkResetFences(self.logicaldevice.device, 1, &self.temperorycommandbufferinuse);
+        _ = vk.vkResetFences(self.device, 1, &self.temperorycommandbufferinuse);
 
         var cmdbufferallocateinfo: vk.VkCommandBufferAllocateInfo = .{};
         cmdbufferallocateinfo.sType = vk.VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
@@ -942,7 +924,7 @@ pub const graphicalcontext = struct {
         cmdbufferallocateinfo.commandBufferCount = 1;
 
         var commandbuffer: vk.VkCommandBuffer = undefined;
-        if (vk.vkAllocateCommandBuffers(self.logicaldevice.device, &cmdbufferallocateinfo, &commandbuffer) != vk.VK_SUCCESS) {
+        if (vk.vkAllocateCommandBuffers(self.device, &cmdbufferallocateinfo, &commandbuffer) != vk.VK_SUCCESS) {
             std.log.err("Unable to create Command buffer", .{});
             return error.CommandBufferAllocationFailed;
         }
@@ -967,18 +949,18 @@ pub const graphicalcontext = struct {
         submitinfo.commandBufferCount = 1;
         submitinfo.pCommandBuffers = &commandbuffer;
 
-        if (vk.vkQueueSubmit(self.logicaldevice.graphicsqueue.queue, 1, &submitinfo, self.temperorycommandbufferinuse) != vk.VK_SUCCESS) {
+        if (vk.vkQueueSubmit(self.graphicsqueue.queue, 1, &submitinfo, self.temperorycommandbufferinuse) != vk.VK_SUCCESS) {
             std.log.err("Unable to Submit Queue", .{});
             return error.QueueSubmissionFailed;
         }
         _ = vk.vkWaitForFences(
-            self.logicaldevice.device,
+            self.device,
             1,
             &self.temperorycommandbufferinuse,
             vk.VK_TRUE,
             std.math.maxInt(u64),
         );
-        vk.vkFreeCommandBuffers(self.logicaldevice.device, self.commandpoolonetimecommand, 1, &commandbuffer);
+        vk.vkFreeCommandBuffers(self.device, self.commandpoolonetimecommand, 1, &commandbuffer);
     }
     fn copybuffer(self: *graphicalcontext, srcbuffer: vk.VkBuffer, dstbuffer: vk.VkBuffer, size: vk.VkDeviceSize) !void {
         const commandbuffer: vk.VkCommandBuffer = try self.beginsingletimecommands();
@@ -1003,10 +985,10 @@ pub const graphicalcontext = struct {
         );
 
         var memdata: ?*anyopaque = undefined;
-        _ = vk.vkMapMemory(self.logicaldevice.device, stagingbuffermemory, 0, buffersize, 0, &memdata);
+        _ = vk.vkMapMemory(self.device, stagingbuffermemory, 0, buffersize, 0, &memdata);
         const ptr: [*]drawing.data = @ptrCast(@alignCast(memdata));
         std.mem.copyForwards(drawing.data, ptr[0..self.vertices.len], self.vertices);
-        _ = vk.vkUnmapMemory(self.logicaldevice.device, stagingbuffermemory);
+        _ = vk.vkUnmapMemory(self.device, stagingbuffermemory);
 
         try createbuffer(
             self,
@@ -1017,12 +999,12 @@ pub const graphicalcontext = struct {
             &self.vertexbuffermemory,
         );
         try copybuffer(self, stagingbuffer, self.vertexbuffer, buffersize);
-        vk.vkDestroyBuffer(self.logicaldevice.device, stagingbuffer, null);
-        vk.vkFreeMemory(self.logicaldevice.device, stagingbuffermemory, null);
+        vk.vkDestroyBuffer(self.device, stagingbuffer, null);
+        vk.vkFreeMemory(self.device, stagingbuffermemory, null);
     }
     fn destroyvertexbuffer(self: *graphicalcontext) void {
-        vk.vkDestroyBuffer(self.logicaldevice.device, self.vertexbuffer, null);
-        vk.vkFreeMemory(self.logicaldevice.device, self.vertexbuffermemory, null);
+        vk.vkDestroyBuffer(self.device, self.vertexbuffer, null);
+        vk.vkFreeMemory(self.device, self.vertexbuffermemory, null);
     }
     fn createbuffer(
         self: *graphicalcontext,
@@ -1038,13 +1020,13 @@ pub const graphicalcontext = struct {
         buffercreateinfo.usage = bufferusageflags;
         buffercreateinfo.sharingMode = vk.VK_SHARING_MODE_EXCLUSIVE;
         buffercreateinfo.flags = 0;
-        if (vk.vkCreateBuffer(self.logicaldevice.device, &buffercreateinfo, null, buffer) != vk.VK_SUCCESS) {
+        if (vk.vkCreateBuffer(self.device, &buffercreateinfo, null, buffer) != vk.VK_SUCCESS) {
             std.log.err("Unable to create vertex buffer", .{});
             return error.FailedToCreateVertexBuffer;
         }
 
         var memoryrequirements: vk.VkMemoryRequirements = .{};
-        vk.vkGetBufferMemoryRequirements(self.logicaldevice.device, buffer.*, &memoryrequirements);
+        vk.vkGetBufferMemoryRequirements(self.device, buffer.*, &memoryrequirements);
 
         var allocationinfo: vk.VkMemoryAllocateInfo = .{};
         allocationinfo.sType = vk.VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
@@ -1054,11 +1036,11 @@ pub const graphicalcontext = struct {
             memoryrequirements.memoryTypeBits,
             memorypropertiesflags,
         );
-        if (vk.vkAllocateMemory(self.logicaldevice.device, &allocationinfo, null, buffermemory) != vk.VK_SUCCESS) {
+        if (vk.vkAllocateMemory(self.device, &allocationinfo, null, buffermemory) != vk.VK_SUCCESS) {
             std.log.err("Unable to Allocate Gpu Memory", .{});
             return error.FailedToAllocateGpuMemory;
         }
-        _ = vk.vkBindBufferMemory(self.logicaldevice.device, buffer.*, buffermemory.*, 0);
+        _ = vk.vkBindBufferMemory(self.device, buffer.*, buffermemory.*, 0);
     }
     fn findmemorytype(self: *graphicalcontext, typefilter: u32, properties: vk.VkMemoryPropertyFlags) !u32 {
         var memoryproperties: vk.VkPhysicalDeviceMemoryProperties = undefined;
@@ -1075,11 +1057,11 @@ pub const graphicalcontext = struct {
 
     fn destroysyncobjects(self: *graphicalcontext) void {
         for (0..self.swapchainimages.len) |i| {
-            vk.vkDestroySemaphore(self.logicaldevice.device, self.imageavailablesephamores[i], null);
-            vk.vkDestroySemaphore(self.logicaldevice.device, self.renderfinishedsephamores[i], null);
-            vk.vkDestroyFence(self.logicaldevice.device, self.inflightfences[i], null);
+            vk.vkDestroySemaphore(self.device, self.imageavailablesephamores[i], null);
+            vk.vkDestroySemaphore(self.device, self.renderfinishedsephamores[i], null);
+            vk.vkDestroyFence(self.device, self.inflightfences[i], null);
         }
-        vk.vkDestroyFence(self.logicaldevice.device, self.temperorycommandbufferinuse, null);
+        vk.vkDestroyFence(self.device, self.temperorycommandbufferinuse, null);
         self.allocator.free(self.imageavailablesephamores);
         self.allocator.free(self.renderfinishedsephamores);
         self.allocator.free(self.inflightfences);
@@ -1095,20 +1077,20 @@ pub const graphicalcontext = struct {
         self.renderfinishedsephamores = try self.allocator.alloc(vk.VkSemaphore, self.swapchainimages.len);
         self.inflightfences = try self.allocator.alloc(vk.VkFence, self.swapchainimages.len);
         for (0..self.swapchainimages.len) |i| {
-            if (vk.vkCreateSemaphore(self.logicaldevice.device, &sephamorecreateinfo, null, &self.imageavailablesephamores[i]) != vk.VK_SUCCESS) {
+            if (vk.vkCreateSemaphore(self.device, &sephamorecreateinfo, null, &self.imageavailablesephamores[i]) != vk.VK_SUCCESS) {
                 std.log.err("Unable to Create Gpu Semaphore", .{});
                 return error.UnableToCreateSemaphore;
             }
-            if (vk.vkCreateSemaphore(self.logicaldevice.device, &sephamorecreateinfo, null, &self.renderfinishedsephamores[i]) != vk.VK_SUCCESS) {
+            if (vk.vkCreateSemaphore(self.device, &sephamorecreateinfo, null, &self.renderfinishedsephamores[i]) != vk.VK_SUCCESS) {
                 std.log.err("Unable to Create Gpu Semaphore", .{});
                 return error.UnableToCreateSemaphore;
             }
-            if (vk.vkCreateFence(self.logicaldevice.device, &fencecreateinfo, null, &self.inflightfences[i]) != vk.VK_SUCCESS) {
+            if (vk.vkCreateFence(self.device, &fencecreateinfo, null, &self.inflightfences[i]) != vk.VK_SUCCESS) {
                 std.log.err("Unable to Create Cpu fence (render)", .{});
                 return error.UnableToCreateFence;
             }
         }
-        if (vk.vkCreateFence(self.logicaldevice.device, &fencecreateinfo, null, &self.temperorycommandbufferinuse) != vk.VK_SUCCESS) {
+        if (vk.vkCreateFence(self.device, &fencecreateinfo, null, &self.temperorycommandbufferinuse) != vk.VK_SUCCESS) {
             std.log.err("Unable to Create Cpu fence (datatransfer)", .{});
             return error.UnableToCreateFence;
         }
@@ -1122,7 +1104,7 @@ pub const graphicalcontext = struct {
         allocinfo.level = vk.VK_COMMAND_BUFFER_LEVEL_PRIMARY;
         allocinfo.commandBufferCount = 1;
         for (0..self.swapchainimages.len) |i| {
-            if (vk.vkAllocateCommandBuffers(self.logicaldevice.device, &allocinfo, &self.commandbuffers[i]) != vk.VK_SUCCESS) {
+            if (vk.vkAllocateCommandBuffers(self.device, &allocinfo, &self.commandbuffers[i]) != vk.VK_SUCCESS) {
                 std.log.err("Unable to create Command buffer", .{});
                 return error.CommandBufferAllocationFailed;
             }
@@ -1132,9 +1114,9 @@ pub const graphicalcontext = struct {
         var commandpoolcreateinfo: vk.VkCommandPoolCreateInfo = .{};
         commandpoolcreateinfo.sType = vk.VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
         commandpoolcreateinfo.flags = vk.VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
-        commandpoolcreateinfo.queueFamilyIndex = self.logicaldevice.graphicsqueue.familyindex;
+        commandpoolcreateinfo.queueFamilyIndex = self.graphicsqueue.familyindex;
 
-        if (vk.vkCreateCommandPool(self.logicaldevice.device, &commandpoolcreateinfo, null, &self.commandpool) != vk.VK_SUCCESS) {
+        if (vk.vkCreateCommandPool(self.device, &commandpoolcreateinfo, null, &self.commandpool) != vk.VK_SUCCESS) {
             std.log.err("Unable to create Command Pool", .{});
             return error.CommandPoolCreationFailed;
         }
@@ -1142,20 +1124,20 @@ pub const graphicalcontext = struct {
         var commandpooldatatransfercreateinfo: vk.VkCommandPoolCreateInfo = .{};
         commandpooldatatransfercreateinfo.sType = vk.VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
         commandpooldatatransfercreateinfo.flags = vk.VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT | vk.VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
-        commandpooldatatransfercreateinfo.queueFamilyIndex = self.logicaldevice.graphicsqueue.familyindex;
+        commandpooldatatransfercreateinfo.queueFamilyIndex = self.graphicsqueue.familyindex;
 
-        if (vk.vkCreateCommandPool(self.logicaldevice.device, &commandpooldatatransfercreateinfo, null, &self.commandpoolonetimecommand) != vk.VK_SUCCESS) {
+        if (vk.vkCreateCommandPool(self.device, &commandpooldatatransfercreateinfo, null, &self.commandpoolonetimecommand) != vk.VK_SUCCESS) {
             std.log.err("Unable to create Command Pool", .{});
             return error.CommandPoolCreationFailed;
         }
     }
     fn destroycommandpools(self: *graphicalcontext) void {
-        vk.vkDestroyCommandPool(self.logicaldevice.device, self.commandpool, null);
-        vk.vkDestroyCommandPool(self.logicaldevice.device, self.commandpoolonetimecommand, null);
+        vk.vkDestroyCommandPool(self.device, self.commandpool, null);
+        vk.vkDestroyCommandPool(self.device, self.commandpoolonetimecommand, null);
     }
     fn destroyframebuffers(self: *graphicalcontext) void {
         for (0..self.swapchainframebuffers.len) |i| {
-            vk.vkDestroyFramebuffer(self.logicaldevice.device, self.swapchainframebuffers[i], null);
+            vk.vkDestroyFramebuffer(self.device, self.swapchainframebuffers[i], null);
         }
         self.allocator.free(self.swapchainframebuffers);
     }
@@ -1172,7 +1154,7 @@ pub const graphicalcontext = struct {
             framebuffercreateinfo.width = self.swapchainextent.width;
             framebuffercreateinfo.height = self.swapchainextent.height;
             framebuffercreateinfo.layers = 1;
-            if (vk.vkCreateFramebuffer(self.logicaldevice.device, &framebuffercreateinfo, null, &self.swapchainframebuffers[i]) != vk.VK_SUCCESS) {
+            if (vk.vkCreateFramebuffer(self.device, &framebuffercreateinfo, null, &self.swapchainframebuffers[i]) != vk.VK_SUCCESS) {
                 std.log.err("Failed To create frame buffer", .{});
                 return error.FrameBufferCreationFailed;
             }
@@ -1246,7 +1228,7 @@ pub const graphicalcontext = struct {
         renderpasscreateinfo.dependencyCount = 1;
         renderpasscreateinfo.pDependencies = &subpassdependency;
 
-        if (vk.vkCreateRenderPass(self.logicaldevice.device, &renderpasscreateinfo, null, &self.renderpass) != vk.VK_SUCCESS) {
+        if (vk.vkCreateRenderPass(self.device, &renderpasscreateinfo, null, &self.renderpass) != vk.VK_SUCCESS) {
             std.log.err("Unable To create Render Pass", .{});
             return error.UnableToCreateRenderPass;
         }
@@ -1258,7 +1240,7 @@ pub const graphicalcontext = struct {
         createinfo.pCode = @ptrCast(code);
 
         var shadermodule: vk.VkShaderModule = undefined;
-        if (vk.vkCreateShaderModule(self.logicaldevice.device, &createinfo, null, &shadermodule) != vk.VK_SUCCESS) {
+        if (vk.vkCreateShaderModule(self.device, &createinfo, null, &shadermodule) != vk.VK_SUCCESS) {
             std.log.err("Unable to Create Shader Module", .{});
             return error.ShaderModuleCreationFailed;
         }
@@ -1390,7 +1372,7 @@ pub const graphicalcontext = struct {
         pipelinelayoutcreateinfo.pushConstantRangeCount = 0;
         pipelinelayoutcreateinfo.pPushConstantRanges = null;
 
-        if (vk.vkCreatePipelineLayout(self.logicaldevice.device, &pipelinelayoutcreateinfo, null, &self.pipelinelayout) != vk.VK_SUCCESS) {
+        if (vk.vkCreatePipelineLayout(self.device, &pipelinelayoutcreateinfo, null, &self.pipelinelayout) != vk.VK_SUCCESS) {
             std.log.err("Unable to Create Pipeline Layout", .{});
             return error.PipelineCreationFailedLayout;
         }
@@ -1413,13 +1395,13 @@ pub const graphicalcontext = struct {
         graphicspipelinecreateinfo.basePipelineHandle = null;
         graphicspipelinecreateinfo.basePipelineIndex = -1;
 
-        if (vk.vkCreateGraphicsPipelines(self.logicaldevice.device, null, 1, &graphicspipelinecreateinfo, null, &self.graphicspipeline) != vk.VK_SUCCESS) {
+        if (vk.vkCreateGraphicsPipelines(self.device, null, 1, &graphicspipelinecreateinfo, null, &self.graphicspipeline) != vk.VK_SUCCESS) {
             std.log.err("Unable to Create Pipeline", .{});
             return error.PipelineCreationFailed;
         }
 
-        vk.vkDestroyShaderModule(self.logicaldevice.device, vertshadermodule, null);
-        vk.vkDestroyShaderModule(self.logicaldevice.device, fragshadermodule, null);
+        vk.vkDestroyShaderModule(self.device, vertshadermodule, null);
+        vk.vkDestroyShaderModule(self.device, fragshadermodule, null);
     }
     fn createimageviews(self: *graphicalcontext) !void {
         self.swapchainimageviews = try self.allocator.alloc(vk.VkImageView, self.swapchainimages.len);
@@ -1446,7 +1428,7 @@ pub const graphicalcontext = struct {
         createinfo.subresourceRange.baseArrayLayer = 0;
         createinfo.subresourceRange.layerCount = 1;
 
-        if (vk.vkCreateImageView(self.logicaldevice.device, &createinfo, null, imageview) != vk.VK_SUCCESS) {
+        if (vk.vkCreateImageView(self.device, &createinfo, null, imageview) != vk.VK_SUCCESS) {
             std.log.err("Failed to Create image Views", .{});
             return error.FailedToCreateImageView;
         }
@@ -1459,7 +1441,7 @@ pub const graphicalcontext = struct {
         self.allocator.free(self.swapchainimageviews);
     }
     fn destroyimageview(self: *graphicalcontext, imageview: vk.VkImageView) void {
-        vk.vkDestroyImageView(self.logicaldevice.device, imageview, null);
+        vk.vkDestroyImageView(self.device, imageview, null);
     }
     fn createswapchain(self: *graphicalcontext, oldswapchain: vk.VkSwapchainKHR) !void {
         const swapchainsprt: *vkswapchain.swapchainsupport = try vkswapchain.swapchainsupport.getSwapchainDetails(
@@ -1488,8 +1470,8 @@ pub const graphicalcontext = struct {
         createinfo.imageArrayLayers = 1;
         createinfo.imageUsage = vk.VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
 
-        if (self.logicaldevice.presentqueue.familyindex != self.logicaldevice.graphicsqueue.familyindex) {
-            const queuefamilyindices: [2]u32 = .{ self.logicaldevice.presentqueue.familyindex, self.logicaldevice.graphicsqueue.familyindex };
+        if (self.presentqueue.familyindex != self.graphicsqueue.familyindex) {
+            const queuefamilyindices: [2]u32 = .{ self.presentqueue.familyindex, self.graphicsqueue.familyindex };
             createinfo.imageSharingMode = vk.VK_SHARING_MODE_CONCURRENT;
             createinfo.queueFamilyIndexCount = 2;
             createinfo.pQueueFamilyIndices = &queuefamilyindices[0];
@@ -1507,28 +1489,91 @@ pub const graphicalcontext = struct {
         createinfo.clipped = vk.VK_TRUE;
 
         createinfo.oldSwapchain = oldswapchain;
-        if (vk.vkCreateSwapchainKHR(self.logicaldevice.device, &createinfo, null, &self.swapchain) != vk.VK_SUCCESS) {
+        if (vk.vkCreateSwapchainKHR(self.device, &createinfo, null, &self.swapchain) != vk.VK_SUCCESS) {
             std.log.err("Unable to Create Swapchain", .{});
             return error.SwapChainCreationFailed;
         }
     }
     fn getswapchainImages(self: *graphicalcontext) !void {
         var imagecount: u32 = 0;
-        _ = vk.vkGetSwapchainImagesKHR(self.logicaldevice.device, self.swapchain, &imagecount, null);
+        _ = vk.vkGetSwapchainImagesKHR(self.device, self.swapchain, &imagecount, null);
         self.swapchainimages = try self.allocator.alloc(vk.VkImage, imagecount);
-        _ = vk.vkGetSwapchainImagesKHR(self.logicaldevice.device, self.swapchain, &imagecount, &self.swapchainimages[0]);
+        _ = vk.vkGetSwapchainImagesKHR(self.device, self.swapchain, &imagecount, &self.swapchainimages[0]);
     }
     fn destroyswapchainimages(self: *graphicalcontext) void {
         self.allocator.free(self.swapchainimages);
     }
     fn freeswapchain(self: *graphicalcontext, swapchain: vk.VkSwapchainKHR) void {
-        vk.vkDestroySwapchainKHR(self.logicaldevice.device, swapchain, null);
+        vk.vkDestroySwapchainKHR(self.device, swapchain, null);
     }
-    fn createsurface(instance: vk.VkInstance, window: *vk.GLFWwindow, surface: *vk.VkSurfaceKHR) !void {
-        if (vk.glfwCreateWindowSurface(instance, window, null, surface) != vk.VK_SUCCESS) {
+    fn createsurface(self: *graphicalcontext) !void {
+        if (vk.glfwCreateWindowSurface(self.instance.instance, self.window, null, &self.surface) != vk.VK_SUCCESS) {
             std.log.err("Glfw surface creation failed", .{});
             return error.GlfwSurfaceCreationFailed;
         }
+    }
+    fn createlogicaldevice(self: *graphicalcontext) !void {
+        self.queuelist.queueflagsmatch(vk.VK_QUEUE_GRAPHICS_BIT);
+        const ques1num = self.queuelist.queuesfound;
+        const ques1 = try self.allocator.dupe(u32, self.queuelist.searchresult);
+        defer self.allocator.free(ques1);
+        self.queuelist.checkpresentCapable(self.surface, self.physicaldevice.physicaldevice);
+        const ques2num = self.queuelist.queuesfound;
+        const ques2 = try self.allocator.dupe(u32, self.queuelist.searchresult);
+        defer self.allocator.free(ques2);
+        var quefamilyindex: [2]u32 = undefined;
+        var uniquefound: bool = false;
+        for (0..ques1num) |i| {
+            for (0..ques2num) |j| {
+                if (ques1[i] != ques2[j]) {
+                    quefamilyindex = .{ ques1[i], ques2[j] };
+                    uniquefound = true;
+                }
+            }
+        }
+        if (!uniquefound) {
+            std.log.err("Unable to find unique quefamilies", .{});
+            return error.UnableToFindUniqueQueueFamilyIndex;
+        }
+        var quecreateinfos: [quefamilyindex.len]vk.VkDeviceQueueCreateInfo = undefined;
+        var quepriority: f32 = 1.0;
+        for (0..quefamilyindex.len) |i| {
+            quecreateinfos[i].sType = vk.VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
+            quecreateinfos[i].pNext = null;
+            quecreateinfos[i].flags = 0;
+            quecreateinfos[i].queueFamilyIndex = quefamilyindex[i];
+            quecreateinfos[i].queueCount = 1;
+            quecreateinfos[i].pQueuePriorities = &quepriority;
+        } //specify device features
+        var physicaldevicefeatures: vk.VkPhysicalDeviceFeatures = .{};
+        physicaldevicefeatures.samplerAnisotropy = self.physicaldevice.physicaldevicefeatures.samplerAnisotropy;
+        physicaldevicefeatures.sampleRateShading = self.physicaldevice.physicaldevicefeatures.sampleRateShading;
+        //creating logicaldevice
+        var createinfo: vk.VkDeviceCreateInfo = .{};
+        createinfo.sType = vk.VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
+        createinfo.pQueueCreateInfos = &quecreateinfos[0];
+        createinfo.queueCreateInfoCount = quecreateinfos.len;
+        createinfo.pEnabledFeatures = &physicaldevicefeatures;
+        createinfo.enabledExtensionCount = @intCast(deviceextensions.len);
+        createinfo.ppEnabledExtensionNames = @as([*c]const [*c]const u8, &deviceextensions[0]);
+
+        if (enablevalidationlayers) {
+            createinfo.enabledLayerCount = @intCast(validationlayers.len);
+            createinfo.ppEnabledLayerNames = @as([*c]const [*c]const u8, &validationlayers[0]);
+        } else {
+            createinfo.enabledLayerCount = 0;
+        }
+        if (vk.vkCreateDevice(self.physicaldevice.physicaldevice, &createinfo, null, &self.device) != vk.VK_SUCCESS) {
+            std.log.err("unable to create logical device", .{});
+            return error.FailedLogicalDeviceCreation;
+        }
+        vk.vkGetDeviceQueue(self.device, quefamilyindex[0], 0, &self.graphicsqueue.queue);
+        self.graphicsqueue.familyindex = quefamilyindex[0];
+        vk.vkGetDeviceQueue(self.device, quefamilyindex[1], 0, &self.presentqueue.queue);
+        self.presentqueue.familyindex = quefamilyindex[1];
+    }
+    fn destroylogicaldevice(self: *graphicalcontext) void {
+        vk.vkDestroyDevice(self.device, null);
     }
 };
 

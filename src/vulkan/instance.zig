@@ -1,23 +1,19 @@
 //! This file contains Everything needed for vulkan Instance creation and physical device selection
 //! Note:Communication between instances is not possible so try to use 1 instance
-const validationlayerverbose: bool = true;
-pub const instancecreateinfo = struct {
-    allocator: std.mem.Allocator,
-    InstanceExtensions: [][*c]const u8,
-    validationlayers: [][*c]const u8,
-    validationlayerInstanceExtensions: [][*c]const u8,
-    enablevalidationlayers: bool,
-};
+const validationlayers: [1][*c]const u8 = .{"VK_LAYER_KHRONOS_validation"};
+const validationlayerInstanceExtensions: [1][*c]const u8 = .{"VK_EXT_debug_utils"};
+const InstanceExtensions: [0][*c]const u8 = .{};
+const deviceextensions: [1][*c]const u8 = .{"VK_KHR_swapchain"};
+const enablevalidationlayers: bool = true;
+const validationlayerverbose: bool = false;
 pub const Instance = struct {
     allocator: std.mem.Allocator,
     instance: vk.VkInstance,
     debugmessanger: vk.VkDebugUtilsMessengerEXT,
-    enablevalidationlayers: bool,
     ///create an vulkan instance
-    pub fn createinstance(instancecreateprop: instancecreateinfo) !*Instance {
-        const self: *Instance = try instancecreateprop.allocator.create(Instance);
-        self.allocator = instancecreateprop.allocator;
-        self.enablevalidationlayers = instancecreateprop.enablevalidationlayers;
+    pub fn createinstance(allocator: std.mem.Allocator) !*Instance {
+        const self: *Instance = try allocator.create(Instance);
+        self.allocator = allocator;
 
         var appinfo: vk.VkApplicationInfo = .{};
         appinfo.sType = vk.VK_STRUCTURE_TYPE_APPLICATION_INFO;
@@ -33,18 +29,18 @@ pub const Instance = struct {
 
         var extensioncount: u32 = 0;
         var instanceextensions: [][*c]const u8 = undefined;
-        try getrequiredextensions(self, instancecreateprop, &extensioncount, &instanceextensions);
+        try getrequiredextensions(self, &extensioncount, &instanceextensions);
         defer self.allocator.free(instanceextensions);
         checkextensions(self.allocator, extensioncount, &instanceextensions[0]);
         createinfo.enabledExtensionCount = extensioncount;
         createinfo.ppEnabledExtensionNames = &instanceextensions[0];
 
-        if (!checkvalidationlayersupport(self.allocator, instancecreateprop) and instancecreateprop.enablevalidationlayers) {
+        if (!checkvalidationlayersupport(self.allocator) and enablevalidationlayers) {
             @panic("unable to find validation layers");
         }
-        if (instancecreateprop.enablevalidationlayers) {
-            createinfo.enabledLayerCount = @intCast(instancecreateprop.validationlayers.len);
-            createinfo.ppEnabledLayerNames = &instancecreateprop.validationlayers[0];
+        if (enablevalidationlayers) {
+            createinfo.enabledLayerCount = @intCast(validationlayers.len);
+            createinfo.ppEnabledLayerNames = &validationlayers[0];
 
             var debugcreateInfo: vk.VkDebugUtilsMessengerCreateInfoEXT = .{};
             setdebugmessangercreateinfo(&debugcreateInfo);
@@ -66,37 +62,37 @@ pub const Instance = struct {
         self.allocator.destroy(self);
     }
     ///creates an array of vulkan instance extensions required for instance array should be freed after use
-    fn getrequiredextensions(self: *Instance, instancecreateprop: instancecreateinfo, extensioncount: *u32, instanceextensions: *[][*c]const u8) !void {
+    fn getrequiredextensions(self: *Instance, extensioncount: *u32, instanceextensions: *[][*c]const u8) !void {
         var glfwextensioncount: u32 = 0;
         const glfwextensions = vk.glfwGetRequiredInstanceExtensions(&glfwextensioncount);
 
-        if (instancecreateprop.enablevalidationlayers) {
-            extensioncount.* = glfwextensioncount + @as(u32, @intCast(instancecreateprop.validationlayerInstanceExtensions.len)) + @as(u32, @intCast(instancecreateprop.InstanceExtensions.len));
+        if (enablevalidationlayers) {
+            extensioncount.* = glfwextensioncount + @as(u32, @intCast(validationlayerInstanceExtensions.len)) + @as(u32, @intCast(InstanceExtensions.len));
             var arr: [][*c]const u8 = try self.allocator.alloc([*c]const u8, extensioncount.*);
             var ind: usize = 0;
             for (0..glfwextensioncount) |i| {
                 arr[ind] = glfwextensions[i];
                 ind = ind + 1;
             }
-            for (0..instancecreateprop.validationlayerInstanceExtensions.len) |i| {
-                arr[ind] = instancecreateprop.validationlayerInstanceExtensions[i];
+            for (0..validationlayerInstanceExtensions.len) |i| {
+                arr[ind] = validationlayerInstanceExtensions[i];
                 ind = ind + 1;
             }
-            for (0..instancecreateprop.InstanceExtensions.len) |i| {
-                arr[ind] = instancecreateprop.InstanceExtensions[i];
+            for (0..InstanceExtensions.len) |i| {
+                arr[ind] = InstanceExtensions[i];
                 ind = ind + 1;
             }
             instanceextensions.* = arr;
         } else {
-            extensioncount.* = glfwextensioncount + @as(u32, @intCast(instancecreateprop.InstanceExtensions.len));
+            extensioncount.* = glfwextensioncount + @as(u32, @intCast(InstanceExtensions.len));
             var arr: [][*c]const u8 = try self.allocator.alloc([*c]const u8, extensioncount.*);
             var ind: usize = 0;
             for (0..glfwextensioncount) |i| {
                 arr[ind] = glfwextensions[i];
                 ind = ind + 1;
             }
-            for (0..instancecreateprop.InstanceExtensions.len) |i| {
-                arr[ind] = instancecreateprop.InstanceExtensions[i];
+            for (0..InstanceExtensions.len) |i| {
+                arr[ind] = InstanceExtensions[i];
                 ind = ind + 1;
             }
             instanceextensions.* = arr;
@@ -138,7 +134,7 @@ pub const Instance = struct {
 
         std.log.info("{d}/{d} extensions found", .{ extensions, reqextensioncount });
     }
-    fn checkvalidationlayersupport(allocator: std.mem.Allocator, instancecreateprop: instancecreateinfo) bool {
+    fn checkvalidationlayersupport(allocator: std.mem.Allocator) bool {
         var layerCount: u32 = undefined;
         _ = vk.vkEnumerateInstanceLayerProperties(&layerCount, null);
 
@@ -151,20 +147,20 @@ pub const Instance = struct {
 
         var layersmatched: u32 = 0;
         var layerfound: bool = false;
-        for (0..instancecreateprop.validationlayers.len) |i| {
+        for (0..validationlayers.len) |i| {
             for (0..layerCount) |j| {
-                if (std.mem.orderZ(u8, instancecreateprop.validationlayers[i], @ptrCast(&availableLayer[j].layerName)) == .eq) {
+                if (std.mem.orderZ(u8, validationlayers[i], @ptrCast(&availableLayer[j].layerName)) == .eq) {
                     layersmatched = layersmatched + 1;
                     layerfound = true;
                 }
             }
             if (!layerfound) {
-                std.log.err("Unable to find validation layer: {s}", .{instancecreateprop.validationlayers[i]});
+                std.log.err("Unable to find validation layer: {s}", .{validationlayers[i]});
             }
         }
-        std.log.info("{d}/{d} validation layers found", .{ layersmatched, instancecreateprop.validationlayers.len });
+        std.log.info("{d}/{d} validation layers found", .{ layersmatched, validationlayers.len });
 
-        return layersmatched == instancecreateprop.validationlayers.len;
+        return layersmatched == validationlayers.len;
     }
     ///setup common parameters to create debug messanger
     fn setdebugmessangercreateinfo(createinfo: *vk.VkDebugUtilsMessengerCreateInfoEXT) void {
@@ -176,7 +172,7 @@ pub const Instance = struct {
     }
     ///create a debug messanger for vulkan validation layer
     fn createdebugmessanger(self: *Instance) !void {
-        if (!self.enablevalidationlayers) {
+        if (!enablevalidationlayers) {
             return;
         }
         const raw = vk.vkGetInstanceProcAddr(self.instance, "vkCreateDebugUtilsMessengerEXT");
@@ -194,7 +190,7 @@ pub const Instance = struct {
     }
     ///destroy the debug messanger created via createdebugmessanger
     fn destroydebugmessanger(self: *Instance) void {
-        if (!self.enablevalidationlayers) {
+        if (!enablevalidationlayers) {
             return;
         }
         const raw = vk.vkGetInstanceProcAddr(self.instance, "vkDestroyDebugUtilsMessengerEXT");
@@ -237,7 +233,6 @@ pub const pickphysicaldeviceinfo = struct {
     allocator: std.mem.Allocator,
     instance: *Instance,
     surface: vk.VkSurfaceKHR,
-    deviceextensions: [][*c]const u8,
 };
 pub const PhysicalDevice = struct {
     allocator: std.mem.Allocator,
@@ -315,7 +310,7 @@ pub const PhysicalDevice = struct {
         }
 
         //check extension
-        const devicecompatibility = try checkdeviceextensionsupport(self, pickphysicaldeviceparams.deviceextensions, device);
+        const devicecompatibility = try checkdeviceextensionsupport(self, device);
         if (!devicecompatibility) {
             std.log.warn("Required extensions not found", .{});
             return 0;
@@ -350,7 +345,7 @@ pub const PhysicalDevice = struct {
 
         return score;
     }
-    fn checkdeviceextensionsupport(self: *PhysicalDevice, deviceextensions: [][*c]const u8, device: vk.VkPhysicalDevice) !bool {
+    fn checkdeviceextensionsupport(self: *PhysicalDevice, device: vk.VkPhysicalDevice) !bool {
         var extensioncount: u32 = 0;
         _ = vk.vkEnumerateDeviceExtensionProperties(device, null, &extensioncount, null);
         var extensionproperties = try self.allocator.alloc(vk.VkExtensionProperties, extensioncount);
