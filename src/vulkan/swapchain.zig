@@ -1,3 +1,96 @@
+pub const swapchaincreateinfo = struct {
+    allocator: std.mem.Allocator,
+    logicaldevice: *vklogicaldevice.LogicalDevice,
+    physicaldevice: vk.VkPhysicalDevice,
+    surface: vk.VkSurfaceKHR,
+    oldswapchain: vk.VkSwapchainKHR,
+    window: *vk.GLFWwindow,
+};
+/// A swapchain is unique to a single surface and cannot be shared across multiple surfaces
+/// A swapchain is also bound to a logical device and cannot be shared
+pub const swapchain = struct {
+    allocator: std.mem.Allocator,
+    logicaldevice: *vklogicaldevice.LogicalDevice,
+    surface: vk.VkSurfaceKHR,
+    swapchain: vk.VkSwapchainKHR,
+    imageformat: vk.VkFormat,
+    extent: vk.VkExtent2D,
+    images: []vk.VkImage,
+    pub fn createswapchain(swapchaincreateparams: swapchaincreateinfo) !*swapchain {
+        const self: *swapchain = try swapchaincreateparams.allocator.create(swapchain);
+        self.allocator = swapchaincreateparams.allocator;
+        self.logicaldevice = swapchaincreateparams.logicaldevice;
+        self.surface = swapchaincreateparams.surface;
+
+        const swapchainsprt: *swapchainsupport = try swapchainsupport.getSwapchainDetails(
+            self.allocator,
+            self.surface,
+            swapchaincreateparams.physicaldevice,
+        );
+        defer swapchainsprt.deinit();
+        const surfaceformat: vk.VkSurfaceFormatKHR = try swapchainsprt.chooseformat();
+        self.imageformat = surfaceformat.format;
+        const presentmode: vk.VkPresentModeKHR = swapchainsprt.choosepresentmode();
+        const extent: vk.VkExtent2D = swapchainsprt.chooseswapextent(swapchaincreateparams.window);
+        self.extent = extent;
+        var imagecount: u32 = swapchainsprt.capabilities.minImageCount + 1;
+        if (swapchainsprt.capabilities.maxImageCount > 0 and imagecount > swapchainsprt.capabilities.maxImageCount) {
+            imagecount = swapchainsprt.capabilities.maxImageCount;
+        }
+
+        var createinfo: vk.VkSwapchainCreateInfoKHR = .{};
+        createinfo.sType = vk.VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
+        createinfo.surface = self.surface;
+
+        createinfo.minImageCount = imagecount;
+        createinfo.imageFormat = surfaceformat.format;
+        createinfo.imageColorSpace = surfaceformat.colorSpace;
+        createinfo.imageExtent = extent;
+        createinfo.imageArrayLayers = 1;
+        createinfo.imageUsage = vk.VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+
+        if (self.logicaldevice.presentqueue.familyindex != self.logicaldevice.graphicsqueue.familyindex) {
+            const queuefamilyindices: [2]u32 = .{ self.logicaldevice.presentqueue.familyindex, self.logicaldevice.graphicsqueue.familyindex };
+            createinfo.imageSharingMode = vk.VK_SHARING_MODE_CONCURRENT;
+            createinfo.queueFamilyIndexCount = 2;
+            createinfo.pQueueFamilyIndices = &queuefamilyindices[0];
+        } else {
+            //use this if graphics que and present que are same
+            createinfo.imageSharingMode = vk.VK_SHARING_MODE_EXCLUSIVE;
+            createinfo.queueFamilyIndexCount = 0;
+            createinfo.pQueueFamilyIndices = null;
+        }
+
+        createinfo.preTransform = swapchainsprt.capabilities.currentTransform;
+        createinfo.compositeAlpha = vk.VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
+
+        createinfo.presentMode = presentmode;
+        createinfo.clipped = vk.VK_TRUE;
+
+        createinfo.oldSwapchain = swapchaincreateparams.oldswapchain;
+        if (vk.vkCreateSwapchainKHR(self.logicaldevice.device, &createinfo, null, &self.swapchain) != vk.VK_SUCCESS) {
+            std.log.err("Unable to Create Swapchain", .{});
+            return error.SwapChainCreationFailed;
+        }
+        try self.getswapchainImages();
+        return self;
+    }
+    fn getswapchainImages(self: *swapchain) !void {
+        var imagecount: u32 = 0;
+        _ = vk.vkGetSwapchainImagesKHR(self.logicaldevice.device, self.swapchain, &imagecount, null);
+        self.images = try self.allocator.alloc(vk.VkImage, imagecount);
+        _ = vk.vkGetSwapchainImagesKHR(self.logicaldevice.device, self.swapchain, &imagecount, &self.images[0]);
+    }
+    fn destroyswapchainimages(self: *swapchain) void {
+        self.allocator.free(self.images);
+    }
+    pub fn freeswapchain(self: *swapchain) void {
+        vk.vkDestroySwapchainKHR(self.logicaldevice.device, self.swapchain, null);
+        self.destroyswapchainimages();
+        self.allocator.destroy(self);
+    }
+};
+
 pub const swapchainsupport = struct {
     allocator: std.mem.Allocator,
     capabilities: vk.VkSurfaceCapabilitiesKHR,
@@ -54,4 +147,5 @@ pub const swapchainsupport = struct {
 };
 pub const vk = graphics.vk;
 const graphics = @import("../graphics.zig");
+const vklogicaldevice = @import("logicaldevice.zig");
 const std = @import("std");

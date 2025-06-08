@@ -15,10 +15,7 @@ pub const graphicalcontext = struct {
     queuelist: *vklogicaldevice.graphicsqueue,
     surface: vk.VkSurfaceKHR,
 
-    swapchain: vk.VkSwapchainKHR,
-    swapchainimages: []vk.VkImage,
-    swapchainimageformat: vk.VkFormat,
-    swapchainextent: vk.VkExtent2D,
+    swapchain: *vkswapchain.swapchain,
     swapchainimageviews: []vk.VkImageView,
     renderpass: vk.VkRenderPass,
 
@@ -97,9 +94,19 @@ pub const graphicalcontext = struct {
             .validationlayers = &validationlayers,
         };
         self.logicaldevice = try vklogicaldevice.LogicalDevice.createlogicaldevice(logicaldeviceparams);
+        //load an obj model
         try loadmodel(self);
-        try createswapchain(self, null);
-        try getswapchainImages(self);
+
+        const swapchaincreateparams: vkswapchain.swapchaincreateinfo = .{
+            .allocator = self.allocator,
+            .logicaldevice = self.logicaldevice,
+            .physicaldevice = self.physicaldevice.physicaldevice,
+            .surface = self.surface,
+            .oldswapchain = null,
+            .window = self.window,
+        };
+        self.swapchain = try vkswapchain.swapchain.createswapchain(swapchaincreateparams);
+
         try createimageviews(self);
         try createsyncobjects(self);
         try createrenderpass(self);
@@ -133,8 +140,9 @@ pub const graphicalcontext = struct {
         vk.vkDestroyPipelineLayout(self.logicaldevice.device, self.pipelinelayout, null);
         vk.vkDestroyRenderPass(self.logicaldevice.device, self.renderpass, null);
         destroyimageviews(self);
-        destroyswapchainimages(self);
-        freeswapchain(self, self.swapchain);
+
+        self.swapchain.freeswapchain();
+
         freemodeldata(self);
         destroyuniformbuffers(self);
         destroydescriptorpool(self);
@@ -165,7 +173,7 @@ pub const graphicalcontext = struct {
         renderpassbegininfo.renderPass = self.renderpass;
         renderpassbegininfo.framebuffer = self.swapchainframebuffers[imageindex];
         renderpassbegininfo.renderArea.offset = .{ .x = 0, .y = 0 };
-        renderpassbegininfo.renderArea.extent = self.swapchainextent;
+        renderpassbegininfo.renderArea.extent = self.swapchain.extent;
         var clearcolor: [3]vk.VkClearValue = undefined;
         clearcolor[0].color = vk.VkClearColorValue{ .int32 = .{ 0, 0, 0, 0 } };
         clearcolor[1].depthStencil = vk.VkClearDepthStencilValue{ .depth = 1, .stencil = 0 };
@@ -180,15 +188,15 @@ pub const graphicalcontext = struct {
         var viewport: vk.VkViewport = .{};
         viewport.x = 0;
         viewport.y = 0;
-        viewport.height = @floatFromInt(self.swapchainextent.height);
-        viewport.width = @floatFromInt(self.swapchainextent.width);
+        viewport.height = @floatFromInt(self.swapchain.extent.height);
+        viewport.width = @floatFromInt(self.swapchain.extent.width);
         viewport.minDepth = 0;
         viewport.maxDepth = 1;
         vk.vkCmdSetViewport(commandbuffer, 0, 1, &viewport);
 
         var scissor: vk.VkRect2D = .{};
         scissor.offset = .{ .x = 0, .y = 0 };
-        scissor.extent = self.swapchainextent;
+        scissor.extent = self.swapchain.extent;
         vk.vkCmdSetScissor(commandbuffer, 0, 1, &scissor);
 
         const vertexbuffers: [1]vk.VkBuffer = .{self.vertexbuffer};
@@ -208,33 +216,42 @@ pub const graphicalcontext = struct {
     }
 
     pub fn recreateswapchains(self: *graphicalcontext) !void {
-        const oldswapchain: vk.VkSwapchainKHR = self.swapchain;
-        const swapchainimageslen = self.swapchainimages.len;
-        try createswapchain(self, oldswapchain);
+        const oldswapchain = self.swapchain;
+        const swapchainimageslen = self.swapchain.images.len;
+        const swapchaincreateparams: vkswapchain.swapchaincreateinfo = .{
+            .allocator = self.allocator,
+            .logicaldevice = self.logicaldevice,
+            .physicaldevice = self.physicaldevice.physicaldevice,
+            .surface = self.surface,
+            .oldswapchain = oldswapchain.swapchain,
+            .window = self.window,
+        };
+        const swapchain = try vkswapchain.swapchain.createswapchain(swapchaincreateparams);
+
         _ = vk.vkDeviceWaitIdle(self.logicaldevice.device);
         destroycolorresources(self);
         destroydepthresources(self);
-        destroyswapchainimages(self);
+
         destroyimageviews(self);
         vk.vkDestroyRenderPass(self.logicaldevice.device, self.renderpass, null);
         destroyframebuffers(self);
-        freeswapchain(self, oldswapchain);
-        try getswapchainImages(self);
+        self.swapchain.freeswapchain();
+        self.swapchain = swapchain;
         try createimageviews(self);
         try createcolorresources(self);
         try createdepthresources(self);
         try createrenderpass(self);
         try createframebuffers(self);
-        if (swapchainimageslen != self.swapchainimages.len) @panic("swap chain image length mismatch After Recreation");
+        if (swapchainimageslen != self.swapchain.images.len) @panic("swap chain image length mismatch After Recreation");
     }
     fn createcolorresources(self: *graphicalcontext) !void {
         try self.createimage(
             self.logicaldevice.device,
-            self.swapchainextent.width,
-            self.swapchainextent.height,
+            self.swapchain.extent.width,
+            self.swapchain.extent.height,
             1,
             self.physicaldevice.MaxMsaaSamples,
-            self.swapchainimageformat,
+            self.swapchain.imageformat,
             vk.VK_IMAGE_TILING_OPTIMAL,
             vk.VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT | vk.VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
             vk.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
@@ -245,7 +262,7 @@ pub const graphicalcontext = struct {
             self,
             self.colorimage,
             &self.colorimageview,
-            self.swapchainimageformat,
+            self.swapchain.imageformat,
             vk.VK_IMAGE_ASPECT_COLOR_BIT,
             1,
         );
@@ -276,8 +293,8 @@ pub const graphicalcontext = struct {
         try createimage(
             self,
             self.logicaldevice.device,
-            self.swapchainextent.width,
-            self.swapchainextent.height,
+            self.swapchain.extent.width,
+            self.swapchain.extent.height,
             1,
             self.physicaldevice.MaxMsaaSamples,
             depthformat,
@@ -757,15 +774,15 @@ pub const graphicalcontext = struct {
     fn createdescriptorpool(self: *graphicalcontext) !void {
         var descriptorpoolsizes: [2]vk.VkDescriptorPoolSize = undefined;
         descriptorpoolsizes[0].type = vk.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-        descriptorpoolsizes[0].descriptorCount = @intCast(self.swapchainimages.len);
+        descriptorpoolsizes[0].descriptorCount = @intCast(self.swapchain.images.len);
         descriptorpoolsizes[1].type = vk.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        descriptorpoolsizes[1].descriptorCount = @intCast(self.swapchainimages.len);
+        descriptorpoolsizes[1].descriptorCount = @intCast(self.swapchain.images.len);
 
         var poolcreateinfo: vk.VkDescriptorPoolCreateInfo = .{};
         poolcreateinfo.sType = vk.VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
         poolcreateinfo.poolSizeCount = @intCast(descriptorpoolsizes.len);
         poolcreateinfo.pPoolSizes = &descriptorpoolsizes[0];
-        poolcreateinfo.maxSets = @intCast(self.swapchainimages.len);
+        poolcreateinfo.maxSets = @intCast(self.swapchain.images.len);
 
         if (vk.vkCreateDescriptorPool(self.logicaldevice.device, &poolcreateinfo, null, &self.descriptorpool) != vk.VK_SUCCESS) {
             std.log.err("Unable to create Descriptor Pool", .{});
@@ -776,24 +793,24 @@ pub const graphicalcontext = struct {
         vk.vkDestroyDescriptorPool(self.logicaldevice.device, self.descriptorpool, null);
     }
     fn createdescriptorSets(self: *graphicalcontext) !void {
-        var descriptorsetlayouts: []vk.VkDescriptorSetLayout = try self.allocator.alloc(vk.VkDescriptorSetLayout, self.swapchainimages.len);
+        var descriptorsetlayouts: []vk.VkDescriptorSetLayout = try self.allocator.alloc(vk.VkDescriptorSetLayout, self.swapchain.images.len);
         defer self.allocator.free(descriptorsetlayouts);
-        for (0..self.swapchainimages.len) |i| {
+        for (0..self.swapchain.images.len) |i| {
             descriptorsetlayouts[i] = self.descriptorsetlayout;
         }
-        self.descriptorsets = try self.allocator.alloc(vk.VkDescriptorSet, self.swapchainimages.len);
+        self.descriptorsets = try self.allocator.alloc(vk.VkDescriptorSet, self.swapchain.images.len);
 
         var descriptorsetallocinfo: vk.VkDescriptorSetAllocateInfo = .{};
         descriptorsetallocinfo.sType = vk.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
         descriptorsetallocinfo.descriptorPool = self.descriptorpool;
-        descriptorsetallocinfo.descriptorSetCount = @intCast(self.swapchainimages.len);
+        descriptorsetallocinfo.descriptorSetCount = @intCast(self.swapchain.images.len);
         descriptorsetallocinfo.pSetLayouts = &descriptorsetlayouts[0];
 
         if (vk.vkAllocateDescriptorSets(self.logicaldevice.device, &descriptorsetallocinfo, &self.descriptorsets[0]) != vk.VK_SUCCESS) {
             std.log.err("Unable to create Descriptor Sets", .{});
             return error.FailedToCreateDescriptorSets;
         }
-        for (0..self.swapchainimages.len) |i| {
+        for (0..self.swapchain.images.len) |i| {
             var bufferinfo: vk.VkDescriptorBufferInfo = .{};
             bufferinfo.buffer = self.uniformbuffer[i];
             bufferinfo.offset = 0;
@@ -864,7 +881,7 @@ pub const graphicalcontext = struct {
     }
     fn createuniformbuffers(self: *graphicalcontext) !void {
         const buffersize = @sizeOf(drawing.uniformbufferobject);
-        const count = self.swapchainimages.len;
+        const count = self.swapchain.images.len;
         self.uniformbuffer = try self.allocator.alloc(vk.VkBuffer, count);
         self.uniformbuffermemory = try self.allocator.alloc(vk.VkDeviceMemory, count);
         self.uniformbuffermemotymapped = try self.allocator.alloc(?*anyopaque, count);
@@ -1073,7 +1090,7 @@ pub const graphicalcontext = struct {
     }
 
     fn destroysyncobjects(self: *graphicalcontext) void {
-        for (0..self.swapchainimages.len) |i| {
+        for (0..self.swapchain.images.len) |i| {
             vk.vkDestroySemaphore(self.logicaldevice.device, self.imageavailablesephamores[i], null);
             vk.vkDestroySemaphore(self.logicaldevice.device, self.renderfinishedsephamores[i], null);
             vk.vkDestroyFence(self.logicaldevice.device, self.inflightfences[i], null);
@@ -1090,10 +1107,10 @@ pub const graphicalcontext = struct {
         var fencecreateinfo: vk.VkFenceCreateInfo = .{};
         fencecreateinfo.sType = vk.VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
         fencecreateinfo.flags = vk.VK_FENCE_CREATE_SIGNALED_BIT;
-        self.imageavailablesephamores = try self.allocator.alloc(vk.VkSemaphore, self.swapchainimages.len);
-        self.renderfinishedsephamores = try self.allocator.alloc(vk.VkSemaphore, self.swapchainimages.len);
-        self.inflightfences = try self.allocator.alloc(vk.VkFence, self.swapchainimages.len);
-        for (0..self.swapchainimages.len) |i| {
+        self.imageavailablesephamores = try self.allocator.alloc(vk.VkSemaphore, self.swapchain.images.len);
+        self.renderfinishedsephamores = try self.allocator.alloc(vk.VkSemaphore, self.swapchain.images.len);
+        self.inflightfences = try self.allocator.alloc(vk.VkFence, self.swapchain.images.len);
+        for (0..self.swapchain.images.len) |i| {
             if (vk.vkCreateSemaphore(self.logicaldevice.device, &sephamorecreateinfo, null, &self.imageavailablesephamores[i]) != vk.VK_SUCCESS) {
                 std.log.err("Unable to Create Gpu Semaphore", .{});
                 return error.UnableToCreateSemaphore;
@@ -1114,13 +1131,13 @@ pub const graphicalcontext = struct {
     }
 
     fn createcommandbuffer(self: *graphicalcontext) !void {
-        self.commandbuffers = try self.allocator.alloc(vk.VkCommandBuffer, self.swapchainimages.len);
+        self.commandbuffers = try self.allocator.alloc(vk.VkCommandBuffer, self.swapchain.images.len);
         var allocinfo: vk.VkCommandBufferAllocateInfo = .{};
         allocinfo.sType = vk.VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
         allocinfo.commandPool = self.commandpool;
         allocinfo.level = vk.VK_COMMAND_BUFFER_LEVEL_PRIMARY;
         allocinfo.commandBufferCount = 1;
-        for (0..self.swapchainimages.len) |i| {
+        for (0..self.swapchain.images.len) |i| {
             if (vk.vkAllocateCommandBuffers(self.logicaldevice.device, &allocinfo, &self.commandbuffers[i]) != vk.VK_SUCCESS) {
                 std.log.err("Unable to create Command buffer", .{});
                 return error.CommandBufferAllocationFailed;
@@ -1168,8 +1185,8 @@ pub const graphicalcontext = struct {
             framebuffercreateinfo.renderPass = self.renderpass;
             framebuffercreateinfo.attachmentCount = attachments.len;
             framebuffercreateinfo.pAttachments = &attachments[0];
-            framebuffercreateinfo.width = self.swapchainextent.width;
-            framebuffercreateinfo.height = self.swapchainextent.height;
+            framebuffercreateinfo.width = self.swapchain.extent.width;
+            framebuffercreateinfo.height = self.swapchain.extent.height;
             framebuffercreateinfo.layers = 1;
             if (vk.vkCreateFramebuffer(self.logicaldevice.device, &framebuffercreateinfo, null, &self.swapchainframebuffers[i]) != vk.VK_SUCCESS) {
                 std.log.err("Failed To create frame buffer", .{});
@@ -1179,7 +1196,7 @@ pub const graphicalcontext = struct {
     }
     fn createrenderpass(self: *graphicalcontext) !void {
         var colorattachment: vk.VkAttachmentDescription = .{};
-        colorattachment.format = self.swapchainimageformat;
+        colorattachment.format = self.swapchain.imageformat;
         colorattachment.samples = self.physicaldevice.MaxMsaaSamples;
         colorattachment.loadOp = vk.VK_ATTACHMENT_LOAD_OP_CLEAR;
         colorattachment.storeOp = vk.VK_ATTACHMENT_STORE_OP_STORE;
@@ -1199,7 +1216,7 @@ pub const graphicalcontext = struct {
         depthattachment.finalLayout = vk.VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
 
         var colorattachmentresolve: vk.VkAttachmentDescription = .{};
-        colorattachmentresolve.format = self.swapchainimageformat;
+        colorattachmentresolve.format = self.swapchain.imageformat;
         colorattachmentresolve.samples = vk.VK_SAMPLE_COUNT_1_BIT;
         colorattachmentresolve.loadOp = vk.VK_ATTACHMENT_LOAD_OP_DONT_CARE;
         colorattachmentresolve.storeOp = vk.VK_ATTACHMENT_STORE_OP_STORE;
@@ -1310,14 +1327,14 @@ pub const graphicalcontext = struct {
         var viewport: vk.VkViewport = .{};
         viewport.x = 0;
         viewport.y = 0;
-        viewport.width = @floatFromInt(self.swapchainextent.width);
-        viewport.height = @floatFromInt(self.swapchainextent.height);
+        viewport.width = @floatFromInt(self.swapchain.extent.width);
+        viewport.height = @floatFromInt(self.swapchain.extent.height);
         viewport.minDepth = 0;
         viewport.maxDepth = 1;
 
         var scissor: vk.VkRect2D = .{};
         scissor.offset = .{ .x = 0, .y = 1 };
-        scissor.extent = self.swapchainextent;
+        scissor.extent = self.swapchain.extent;
 
         var viewportstatecreateinfo: vk.VkPipelineViewportStateCreateInfo = .{};
         viewportstatecreateinfo.sType = vk.VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
@@ -1421,9 +1438,9 @@ pub const graphicalcontext = struct {
         vk.vkDestroyShaderModule(self.logicaldevice.device, fragshadermodule, null);
     }
     fn createimageviews(self: *graphicalcontext) !void {
-        self.swapchainimageviews = try self.allocator.alloc(vk.VkImageView, self.swapchainimages.len);
+        self.swapchainimageviews = try self.allocator.alloc(vk.VkImageView, self.swapchain.images.len);
         for (0..self.swapchainimageviews.len) |i| {
-            try self.createimageview(self.swapchainimages[i], &self.swapchainimageviews[i], self.swapchainimageformat, vk.VK_IMAGE_ASPECT_COLOR_BIT, 1);
+            try self.createimageview(self.swapchain.images[i], &self.swapchainimageviews[i], self.swapchain.imageformat, vk.VK_IMAGE_ASPECT_COLOR_BIT, 1);
         }
     }
     fn createimageview(self: *graphicalcontext, image: vk.VkImage, imageview: *vk.VkImageView, format: vk.VkFormat, aspectflags: vk.VkImageAspectFlags, miplevels: u32) !void {
@@ -1459,69 +1476,6 @@ pub const graphicalcontext = struct {
     }
     fn destroyimageview(self: *graphicalcontext, imageview: vk.VkImageView) void {
         vk.vkDestroyImageView(self.logicaldevice.device, imageview, null);
-    }
-    fn createswapchain(self: *graphicalcontext, oldswapchain: vk.VkSwapchainKHR) !void {
-        const swapchainsprt: *vkswapchain.swapchainsupport = try vkswapchain.swapchainsupport.getSwapchainDetails(
-            self.allocator,
-            self.surface,
-            self.physicaldevice.physicaldevice,
-        );
-        defer swapchainsprt.deinit();
-        const surfaceformat: vk.VkSurfaceFormatKHR = try swapchainsprt.chooseformat();
-        self.swapchainimageformat = surfaceformat.format;
-        const presentmode: vk.VkPresentModeKHR = swapchainsprt.choosepresentmode();
-        const extent: vk.VkExtent2D = swapchainsprt.chooseswapextent(self.window);
-        self.swapchainextent = extent;
-        var imagecount: u32 = swapchainsprt.capabilities.minImageCount + 1;
-        if (swapchainsprt.capabilities.maxImageCount > 0 and imagecount > swapchainsprt.capabilities.maxImageCount) {
-            imagecount = swapchainsprt.capabilities.maxImageCount;
-        }
-        var createinfo: vk.VkSwapchainCreateInfoKHR = .{};
-        createinfo.sType = vk.VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
-        createinfo.surface = self.surface;
-
-        createinfo.minImageCount = imagecount;
-        createinfo.imageFormat = surfaceformat.format;
-        createinfo.imageColorSpace = surfaceformat.colorSpace;
-        createinfo.imageExtent = extent;
-        createinfo.imageArrayLayers = 1;
-        createinfo.imageUsage = vk.VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
-
-        if (self.logicaldevice.presentqueue.familyindex != self.logicaldevice.graphicsqueue.familyindex) {
-            const queuefamilyindices: [2]u32 = .{ self.logicaldevice.presentqueue.familyindex, self.logicaldevice.graphicsqueue.familyindex };
-            createinfo.imageSharingMode = vk.VK_SHARING_MODE_CONCURRENT;
-            createinfo.queueFamilyIndexCount = 2;
-            createinfo.pQueueFamilyIndices = &queuefamilyindices[0];
-        } else {
-            //use this if graphics que and present que are same
-            createinfo.imageSharingMode = vk.VK_SHARING_MODE_EXCLUSIVE;
-            createinfo.queueFamilyIndexCount = 0;
-            createinfo.pQueueFamilyIndices = null;
-        }
-
-        createinfo.preTransform = swapchainsprt.capabilities.currentTransform;
-        createinfo.compositeAlpha = vk.VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
-
-        createinfo.presentMode = presentmode;
-        createinfo.clipped = vk.VK_TRUE;
-
-        createinfo.oldSwapchain = oldswapchain;
-        if (vk.vkCreateSwapchainKHR(self.logicaldevice.device, &createinfo, null, &self.swapchain) != vk.VK_SUCCESS) {
-            std.log.err("Unable to Create Swapchain", .{});
-            return error.SwapChainCreationFailed;
-        }
-    }
-    fn getswapchainImages(self: *graphicalcontext) !void {
-        var imagecount: u32 = 0;
-        _ = vk.vkGetSwapchainImagesKHR(self.logicaldevice.device, self.swapchain, &imagecount, null);
-        self.swapchainimages = try self.allocator.alloc(vk.VkImage, imagecount);
-        _ = vk.vkGetSwapchainImagesKHR(self.logicaldevice.device, self.swapchain, &imagecount, &self.swapchainimages[0]);
-    }
-    fn destroyswapchainimages(self: *graphicalcontext) void {
-        self.allocator.free(self.swapchainimages);
-    }
-    fn freeswapchain(self: *graphicalcontext, swapchain: vk.VkSwapchainKHR) void {
-        vk.vkDestroySwapchainKHR(self.logicaldevice.device, swapchain, null);
     }
     fn createsurface(instance: vk.VkInstance, window: *vk.GLFWwindow, surface: *vk.VkSurfaceKHR) !void {
         if (vk.glfwCreateWindowSurface(instance, window, null, surface) != vk.VK_SUCCESS) {

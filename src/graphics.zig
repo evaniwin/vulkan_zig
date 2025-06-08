@@ -125,7 +125,7 @@ fn drawframe(vkinstance: *utilty.graphicalcontext) !void {
     var imageindex: u32 = undefined;
     var result = vk.vkAcquireNextImageKHR(
         vkinstance.logicaldevice.device,
-        vkinstance.swapchain,
+        vkinstance.swapchain.swapchain,
         std.math.maxInt(u64),
         vkinstance.imageavailablesephamores[currentframe],
         null,
@@ -168,7 +168,7 @@ fn drawframe(vkinstance: *utilty.graphicalcontext) !void {
     presentinfo.waitSemaphoreCount = 1;
     presentinfo.pWaitSemaphores = &signalsemaphores[0];
 
-    var swapchains: [1]vk.VkSwapchainKHR = .{vkinstance.swapchain};
+    var swapchains: [1]vk.VkSwapchainKHR = .{vkinstance.swapchain.swapchain};
     presentinfo.swapchainCount = 1;
     presentinfo.pSwapchains = &swapchains[0];
     presentinfo.pImageIndices = &imageindex;
@@ -182,7 +182,7 @@ fn drawframe(vkinstance: *utilty.graphicalcontext) !void {
         std.log.err("unable to obtain swapchain image present", .{});
         return;
     }
-    currentframe = (currentframe + 1) % @min(vkinstance.swapchainimages.len, MAX_FRAMES_IN_FLIGHT);
+    currentframe = (currentframe + 1) % @min(vkinstance.swapchain.images.len, MAX_FRAMES_IN_FLIGHT);
 }
 
 fn updateuniformbuffer(frame: usize, vkinstance: *utilty.graphicalcontext) !void {
@@ -194,8 +194,8 @@ fn updateuniformbuffer(frame: usize, vkinstance: *utilty.graphicalcontext) !void
     ubo.view = mathmatrix.lookat(.{ 2, 3, 3 }, .{ 0, 0, 0 }, .{ 0, 1, 0 });
     ubo.projection = mathmatrix.perspective(
         std.math.degreesToRadians(45),
-        @floatFromInt(vkinstance.swapchainextent.width),
-        @floatFromInt(vkinstance.swapchainextent.height),
+        @floatFromInt(vkinstance.swapchain.extent.width),
+        @floatFromInt(vkinstance.swapchain.extent.height),
         0.1,
         100.0,
     );
