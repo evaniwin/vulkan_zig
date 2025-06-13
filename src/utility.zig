@@ -1194,7 +1194,7 @@ pub const graphicalcontext = struct {
     }
     fn destroyframebuffers(self: *graphicalcontext) void {
         for (0..self.swapchainframebuffers.len) |i| {
-            vk.vkDestroyFramebuffer(self.logicaldevice.device, self.swapchainframebuffers[i], null);
+            vkimage.destroyframebuffer(self.logicaldevice, self.swapchainframebuffers[i]);
         }
         self.allocator.free(self.swapchainframebuffers);
     }
@@ -1203,18 +1203,13 @@ pub const graphicalcontext = struct {
 
         for (0..self.swapchainimageviews.imageviews.len) |i| {
             var attachments: [3]vk.VkImageView = .{ self.colorimageview, self.depthimageview, self.swapchainimageviews.imageviews[i] };
-            var framebuffercreateinfo: vk.VkFramebufferCreateInfo = .{};
-            framebuffercreateinfo.sType = vk.VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
-            framebuffercreateinfo.renderPass = self.renderpass;
-            framebuffercreateinfo.attachmentCount = attachments.len;
-            framebuffercreateinfo.pAttachments = &attachments[0];
-            framebuffercreateinfo.width = self.swapchain.extent.width;
-            framebuffercreateinfo.height = self.swapchain.extent.height;
-            framebuffercreateinfo.layers = 1;
-            if (vk.vkCreateFramebuffer(self.logicaldevice.device, &framebuffercreateinfo, null, &self.swapchainframebuffers[i]) != vk.VK_SUCCESS) {
-                std.log.err("Failed To create frame buffer", .{});
-                return error.FrameBufferCreationFailed;
-            }
+            try vkimage.createframebuffer(
+                self.logicaldevice,
+                &self.swapchainframebuffers[i],
+                self.renderpass,
+                &attachments,
+                self.swapchain.extent,
+            );
         }
     }
     fn createrenderpass(self: *graphicalcontext) !void {

@@ -41,6 +41,30 @@ pub const imageviews = struct {
         self.allocator.destroy(self);
     }
 };
+
+pub fn createframebuffer(
+    logicaldevice: *vklogicaldevice.LogicalDevice,
+    framebuffer: *vk.VkFramebuffer,
+    renderpass: vk.VkRenderPass,
+    attachments: []vk.VkImageView,
+    extent: vk.VkExtent2D,
+) !void {
+    var framebuffercreateinfo: vk.VkFramebufferCreateInfo = .{};
+    framebuffercreateinfo.sType = vk.VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+    framebuffercreateinfo.renderPass = renderpass;
+    framebuffercreateinfo.attachmentCount = @intCast(attachments.len);
+    framebuffercreateinfo.pAttachments = &attachments[0];
+    framebuffercreateinfo.width = extent.width;
+    framebuffercreateinfo.height = extent.height;
+    framebuffercreateinfo.layers = 1;
+    if (vk.vkCreateFramebuffer(logicaldevice.device, &framebuffercreateinfo, null, framebuffer) != vk.VK_SUCCESS) {
+        std.log.err("Failed To create frame buffer", .{});
+        return error.FrameBufferCreationFailed;
+    }
+}
+pub fn destroyframebuffer(logicaldevice: *vklogicaldevice.LogicalDevice, framebuffer: vk.VkFramebuffer) void {
+    vk.vkDestroyFramebuffer(logicaldevice.device, framebuffer, null);
+}
 pub fn createimageview(
     logicaldevice: *vklogicaldevice.LogicalDevice,
     image: vk.VkImage,
