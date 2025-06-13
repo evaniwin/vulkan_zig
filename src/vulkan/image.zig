@@ -1,33 +1,39 @@
-const imageviewcreateinfo = struct {
+pub const imageviewcreateinfo = struct {
     allocator: std.mem.Allocator,
-    logicaldevice: vk.VkDevice,
+    logicaldevice: *vklogicaldevice.LogicalDevice,
+    imageformat: vk.VkFormat,
+    aspectflags: vk.VkImageAspectFlags,
     images: []vk.VkImage,
 };
-const imageviews = struct {
+pub const imageviews = struct {
     allocator: std.mem.Allocator,
-    logicaldevice: vk.VkDevice,
+    logicaldevice: *vklogicaldevice.LogicalDevice,
     imageformat: vk.VkFormat,
+    aspectflags: vk.VkImageAspectFlags,
     images: []vk.VkImage,
     imageviews: []vk.VkImageView,
-    fn createimageviews(imageviewcreateparams: imageviewcreateinfo) !*imageviews {
+    pub fn createimageviews(imageviewcreateparams: imageviewcreateinfo) !*imageviews {
         const self: *imageviews = try imageviewcreateparams.allocator.create(imageviews);
         self.allocator = imageviewcreateparams.allocator;
         self.logicaldevice = imageviewcreateparams.logicaldevice;
+        self.imageformat = imageviewcreateparams.imageformat;
         self.images = imageviewcreateparams.images;
+        self.aspectflags = imageviewcreateparams.aspectflags;
 
         self.imageviews = try self.allocator.alloc(vk.VkImageView, self.images.len);
         for (0..self.imageviews.len) |i| {
             try createimageview(
+                self.logicaldevice,
                 self.images[i],
                 &self.imageviews[i],
                 self.imageformat,
-                vk.VK_IMAGE_ASPECT_COLOR_BIT,
+                self.aspectflags,
                 1,
             );
         }
         return self;
     }
-    fn destroyimageviews(self: *imageviews) void {
+    pub fn destroyimageviews(self: *imageviews) void {
         for (self.imageviews) |imageview| {
             destroyimageview(self.logicaldevice, imageview);
         }
@@ -35,7 +41,7 @@ const imageviews = struct {
         self.allocator.destroy(self);
     }
 };
-fn createimageview(
+pub fn createimageview(
     logicaldevice: *vklogicaldevice.LogicalDevice,
     image: vk.VkImage,
     imageview: *vk.VkImageView,
@@ -66,7 +72,7 @@ fn createimageview(
         return error.FailedToCreateImageView;
     }
 }
-fn destroyimageview(logicaldevice: *vklogicaldevice.LogicalDevice, imageview: vk.VkImageView) void {
+pub fn destroyimageview(logicaldevice: *vklogicaldevice.LogicalDevice, imageview: vk.VkImageView) void {
     vk.vkDestroyImageView(logicaldevice.device, imageview, null);
 }
 

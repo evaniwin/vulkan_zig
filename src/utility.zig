@@ -16,7 +16,7 @@ pub const graphicalcontext = struct {
     surface: vk.VkSurfaceKHR,
 
     swapchain: *vkswapchain.swapchain,
-    swapchainimageviews: []vk.VkImageView,
+    swapchainimageviews: *vkimage.imageviews,
     renderpass: vk.VkRenderPass,
 
     descriptorsetlayout: vk.VkDescriptorSetLayout,
@@ -107,7 +107,15 @@ pub const graphicalcontext = struct {
         };
         self.swapchain = try vkswapchain.swapchain.createswapchain(swapchaincreateparams);
 
-        try createimageviews(self);
+        const imageviewparams: vkimage.imageviewcreateinfo = .{
+            .allocator = self.allocator,
+            .logicaldevice = self.logicaldevice,
+            .imageformat = self.swapchain.imageformat,
+            .aspectflags = vk.VK_IMAGE_ASPECT_COLOR_BIT,
+            .images = self.swapchain.images,
+        };
+        self.swapchainimageviews = try vkimage.imageviews.createimageviews(imageviewparams);
+
         try createsyncobjects(self);
         try createrenderpass(self);
         try createdescriptorsetlayout(self);
@@ -139,7 +147,7 @@ pub const graphicalcontext = struct {
         vk.vkDestroyPipeline(self.logicaldevice.device, self.graphicspipeline, null);
         vk.vkDestroyPipelineLayout(self.logicaldevice.device, self.pipelinelayout, null);
         vk.vkDestroyRenderPass(self.logicaldevice.device, self.renderpass, null);
-        destroyimageviews(self);
+        self.swapchainimageviews.destroyimageviews();
 
         self.swapchain.freeswapchain();
 
@@ -232,12 +240,20 @@ pub const graphicalcontext = struct {
         destroycolorresources(self);
         destroydepthresources(self);
 
-        destroyimageviews(self);
+        self.swapchainimageviews.destroyimageviews();
         vk.vkDestroyRenderPass(self.logicaldevice.device, self.renderpass, null);
         destroyframebuffers(self);
         self.swapchain.freeswapchain();
         self.swapchain = swapchain;
-        try createimageviews(self);
+
+        const imageviewparams: vkimage.imageviewcreateinfo = .{
+            .allocator = self.allocator,
+            .logicaldevice = self.logicaldevice,
+            .imageformat = self.swapchain.imageformat,
+            .aspectflags = vk.VK_IMAGE_ASPECT_COLOR_BIT,
+            .images = self.swapchain.images,
+        };
+        self.swapchainimageviews = try vkimage.imageviews.createimageviews(imageviewparams);
         try createcolorresources(self);
         try createdepthresources(self);
         try createrenderpass(self);
@@ -258,8 +274,8 @@ pub const graphicalcontext = struct {
             &self.colorimage,
             &self.colorimagememory,
         );
-        try createimageview(
-            self,
+        try vkimage.createimageview(
+            self.logicaldevice,
             self.colorimage,
             &self.colorimageview,
             self.swapchain.imageformat,
@@ -304,8 +320,8 @@ pub const graphicalcontext = struct {
             &self.depthimage,
             &self.depthimagememory,
         );
-        try createimageview(
-            self,
+        try vkimage.createimageview(
+            self.logicaldevice,
             self.depthimage,
             &self.depthimageview,
             depthformat,
@@ -375,10 +391,17 @@ pub const graphicalcontext = struct {
         vk.vkDestroySampler(self.logicaldevice.device, self.textureimagesampler, null);
     }
     fn createtextureimageview(self: *graphicalcontext) !void {
-        try self.createimageview(self.textureimage, &self.textureimageview, vk.VK_FORMAT_R8G8B8A8_SRGB, vk.VK_IMAGE_ASPECT_COLOR_BIT, self.miplevels);
+        try vkimage.createimageview(
+            self.logicaldevice,
+            self.textureimage,
+            &self.textureimageview,
+            vk.VK_FORMAT_R8G8B8A8_SRGB,
+            vk.VK_IMAGE_ASPECT_COLOR_BIT,
+            self.miplevels,
+        );
     }
     fn destroytextureimageview(self: *graphicalcontext) void {
-        self.destroyimageview(self.textureimageview);
+        vkimage.destroyimageview(self.logicaldevice, self.textureimageview);
     }
     //TODO create seperare funciton for loading image
     fn user_error_fn(pngptr: png.png_structp, error_msg: [*c]const u8) callconv(.c) void {
@@ -1176,10 +1199,10 @@ pub const graphicalcontext = struct {
         self.allocator.free(self.swapchainframebuffers);
     }
     fn createframebuffers(self: *graphicalcontext) !void {
-        self.swapchainframebuffers = try self.allocator.alloc(vk.VkFramebuffer, self.swapchainimageviews.len);
+        self.swapchainframebuffers = try self.allocator.alloc(vk.VkFramebuffer, self.swapchainimageviews.imageviews.len);
 
-        for (0..self.swapchainimageviews.len) |i| {
-            var attachments: [3]vk.VkImageView = .{ self.colorimageview, self.depthimageview, self.swapchainimageviews[i] };
+        for (0..self.swapchainimageviews.imageviews.len) |i| {
+            var attachments: [3]vk.VkImageView = .{ self.colorimageview, self.depthimageview, self.swapchainimageviews.imageviews[i] };
             var framebuffercreateinfo: vk.VkFramebufferCreateInfo = .{};
             framebuffercreateinfo.sType = vk.VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
             framebuffercreateinfo.renderPass = self.renderpass;
@@ -1437,46 +1460,6 @@ pub const graphicalcontext = struct {
         vk.vkDestroyShaderModule(self.logicaldevice.device, vertshadermodule, null);
         vk.vkDestroyShaderModule(self.logicaldevice.device, fragshadermodule, null);
     }
-    fn createimageviews(self: *graphicalcontext) !void {
-        self.swapchainimageviews = try self.allocator.alloc(vk.VkImageView, self.swapchain.images.len);
-        for (0..self.swapchainimageviews.len) |i| {
-            try self.createimageview(self.swapchain.images[i], &self.swapchainimageviews[i], self.swapchain.imageformat, vk.VK_IMAGE_ASPECT_COLOR_BIT, 1);
-        }
-    }
-    fn createimageview(self: *graphicalcontext, image: vk.VkImage, imageview: *vk.VkImageView, format: vk.VkFormat, aspectflags: vk.VkImageAspectFlags, miplevels: u32) !void {
-        var createinfo: vk.VkImageViewCreateInfo = .{};
-        createinfo.sType = vk.VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-        createinfo.image = image;
-
-        createinfo.viewType = vk.VK_IMAGE_VIEW_TYPE_2D;
-        createinfo.format = format;
-
-        createinfo.components.r = vk.VK_COMPONENT_SWIZZLE_IDENTITY;
-        createinfo.components.g = vk.VK_COMPONENT_SWIZZLE_IDENTITY;
-        createinfo.components.b = vk.VK_COMPONENT_SWIZZLE_IDENTITY;
-        createinfo.components.a = vk.VK_COMPONENT_SWIZZLE_IDENTITY;
-
-        createinfo.subresourceRange.aspectMask = aspectflags;
-        createinfo.subresourceRange.baseMipLevel = 0;
-        createinfo.subresourceRange.levelCount = miplevels;
-        createinfo.subresourceRange.baseArrayLayer = 0;
-        createinfo.subresourceRange.layerCount = 1;
-
-        if (vk.vkCreateImageView(self.logicaldevice.device, &createinfo, null, imageview) != vk.VK_SUCCESS) {
-            std.log.err("Failed to Create image Views", .{});
-            return error.FailedToCreateImageView;
-        }
-    }
-
-    fn destroyimageviews(self: *graphicalcontext) void {
-        for (self.swapchainimageviews) |imageview| {
-            self.destroyimageview(imageview);
-        }
-        self.allocator.free(self.swapchainimageviews);
-    }
-    fn destroyimageview(self: *graphicalcontext, imageview: vk.VkImageView) void {
-        vk.vkDestroyImageView(self.logicaldevice.device, imageview, null);
-    }
     fn createsurface(instance: vk.VkInstance, window: *vk.GLFWwindow, surface: *vk.VkSurfaceKHR) !void {
         if (vk.glfwCreateWindowSurface(instance, window, null, surface) != vk.VK_SUCCESS) {
             std.log.err("Glfw surface creation failed", .{});
@@ -1532,6 +1515,7 @@ const graphics = @import("graphics.zig");
 const vkinstance = @import("vulkan/instance.zig");
 const vkswapchain = @import("vulkan/swapchain.zig");
 const vklogicaldevice = @import("vulkan/logicaldevice.zig");
+const vkimage = @import("vulkan/image.zig");
 const helper = @import("helpers.zig");
 const main = @import("main.zig");
 const std = @import("std");
