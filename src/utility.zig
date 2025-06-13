@@ -123,7 +123,7 @@ pub const graphicalcontext = struct {
         try createcommandpools(self);
         try createcolorresources(self);
         try createdepthresources(self);
-        try createframebuffers(self);
+        try createswapchainframebuffers(self);
         try createtextureimage(self);
         try createtextureimageview(self);
         try createtextureimagesampler(self);
@@ -141,7 +141,7 @@ pub const graphicalcontext = struct {
         destroytextureimageview(self);
         destroyimage(self, self.textureimage, self.textureimagememory);
         destroycommandpools(self);
-        destroyframebuffers(self);
+        destroyswapchainframebuffers(self);
         destroydepthresources(self);
         destroycolorresources(self);
         vk.vkDestroyPipeline(self.logicaldevice.device, self.graphicspipeline, null);
@@ -242,7 +242,7 @@ pub const graphicalcontext = struct {
 
         self.swapchainimageviews.destroyimageviews();
         vk.vkDestroyRenderPass(self.logicaldevice.device, self.renderpass, null);
-        destroyframebuffers(self);
+        destroyswapchainframebuffers(self);
         self.swapchain.freeswapchain();
         self.swapchain = swapchain;
 
@@ -257,7 +257,7 @@ pub const graphicalcontext = struct {
         try createcolorresources(self);
         try createdepthresources(self);
         try createrenderpass(self);
-        try createframebuffers(self);
+        try createswapchainframebuffers(self);
         if (swapchainimageslen != self.swapchain.images.len) @panic("swap chain image length mismatch After Recreation");
     }
     fn createcolorresources(self: *graphicalcontext) !void {
@@ -1192,13 +1192,13 @@ pub const graphicalcontext = struct {
         vk.vkDestroyCommandPool(self.logicaldevice.device, self.commandpool, null);
         vk.vkDestroyCommandPool(self.logicaldevice.device, self.commandpoolonetimecommand, null);
     }
-    fn destroyframebuffers(self: *graphicalcontext) void {
+    fn destroyswapchainframebuffers(self: *graphicalcontext) void {
         for (0..self.swapchainframebuffers.len) |i| {
             vkimage.destroyframebuffer(self.logicaldevice, self.swapchainframebuffers[i]);
         }
         self.allocator.free(self.swapchainframebuffers);
     }
-    fn createframebuffers(self: *graphicalcontext) !void {
+    fn createswapchainframebuffers(self: *graphicalcontext) !void {
         self.swapchainframebuffers = try self.allocator.alloc(vk.VkFramebuffer, self.swapchainimageviews.imageviews.len);
 
         for (0..self.swapchainimageviews.imageviews.len) |i| {
