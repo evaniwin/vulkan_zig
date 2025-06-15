@@ -24,28 +24,17 @@ pub const LogicalDevice = struct {
         self.physicaldevice = logicaldeviceparams.physicaldevice;
         self.queuelist = logicaldeviceparams.queuelist;
 
-        self.queuelist.queueflagsmatch(vk.VK_QUEUE_GRAPHICS_BIT);
-        const ques1num = self.queuelist.queuesfound;
-        const ques1 = try self.allocator.dupe(u32, self.queuelist.searchresult);
-        defer self.allocator.free(ques1);
-        self.queuelist.checkpresentCapable(logicaldeviceparams.surface, self.physicaldevice.physicaldevice);
-        const ques2num = self.queuelist.queuesfound;
-        const ques2 = try self.allocator.dupe(u32, self.queuelist.searchresult);
-        defer self.allocator.free(ques2);
         var quefamilyindex: [2]u32 = undefined;
-        var uniquefound: bool = false;
-        for (0..ques1num) |i| {
-            for (0..ques2num) |j| {
-                if (ques1[i] != ques2[j]) {
-                    quefamilyindex = .{ ques1[i], ques2[j] };
-                    uniquefound = true;
-                }
-            }
-        }
-        if (!uniquefound) {
-            std.log.err("Unable to find unique quefamilies", .{});
-            return error.UnableToFindUniqueQueueFamilyIndex;
-        }
+        self.queuelist.queueflagsmatch(vk.VK_QUEUE_GRAPHICS_BIT);
+        self.queuelist.filternotinuse();
+        if (self.queuelist.queuesfound == 0) @panic("no graphics queue found");
+        self.queuelist.markQueueInuse(self.queuelist.searchresult[0]);
+        quefamilyindex[0] = self.queuelist.searchresult[0];
+        self.queuelist.checkpresentCapable(logicaldeviceparams.surface, self.physicaldevice.physicaldevice);
+        self.queuelist.filternotinuse();
+        if (self.queuelist.queuesfound == 0) @panic("no present queue found");
+        quefamilyindex[1] = self.queuelist.searchresult[0];
+
         var quecreateinfos: [quefamilyindex.len]vk.VkDeviceQueueCreateInfo = undefined;
         var quepriority: f32 = 1.0;
         for (0..quefamilyindex.len) |i| {
@@ -95,9 +84,10 @@ pub const graphicsqueue = struct {
     allocator: std.mem.Allocator,
     availablequeues: u32,
     queues: []vk.VkQueueFamilyProperties,
+    inUseQueue: []bool,
     queuesfound: u32,
     searchresult: []u32,
-    inUseQueue: []bool,
+
     pub fn getqueuefamily(allocator: std.mem.Allocator, device: vk.VkPhysicalDevice) !*graphicsqueue {
         var self: *graphicsqueue = try allocator.create(graphicsqueue);
         self.allocator = allocator;
@@ -106,6 +96,10 @@ pub const graphicsqueue = struct {
         vk.vkGetPhysicalDeviceQueueFamilyProperties(device, &self.availablequeues, self.queues.ptr);
         self.searchresult = try allocator.alloc(u32, self.availablequeues);
         self.inUseQueue = try allocator.alloc(bool, self.availablequeues);
+        //set all value to false
+        for (0..self.availablequeues) |i| {
+            self.inUseQueue[i] = false;
+        }
         return self;
     }
     pub fn deinit(self: *graphicsqueue) void {
@@ -114,7 +108,7 @@ pub const graphicsqueue = struct {
         self.allocator.free(self.queues);
         self.allocator.destroy(self);
     }
-    pub fn queueflagsmatch(self: *graphicsqueue, queueFlags: u32) void {
+    pub fn queueflagsmatch(self: *graphicsqueue, queueFlags: vk.VkQueueFlags) void {
         var curind: u32 = 0;
         for (0..self.queues.len) |i| {
             if ((self.queues[i].queueFlags & queueFlags) == queueFlags) {
@@ -124,7 +118,7 @@ pub const graphicsqueue = struct {
         }
         self.queuesfound = curind;
     }
-    pub fn queueflagsmatchexact(self: *graphicsqueue, queueFlags: u32) void {
+    pub fn queueflagsmatchexact(self: *graphicsqueue, queueFlags: vk.VkQueueFlags) void {
         var curind: u32 = 0;
         for (0..self.queues.len) |i| {
             if (self.queues[i].queueFlags == queueFlags) {
@@ -150,6 +144,15 @@ pub const graphicsqueue = struct {
             }
         }
         self.queuesfound = curind;
+    }
+    pub fn filternotinuse(self: *graphicsqueue) void {
+        var found: u32 = 0;
+        for (0..self.queuesfound) |i| {
+            if (!self.inUseQueue[self.searchresult[i]]) {
+                self.searchresult[found] = self.searchresult[i];
+                found = found + 1;
+            }
+        }
     }
     pub fn checkifinuse(self: *graphicsqueue, Queue: u32) bool {
         return self.inUseQueue[Queue];

@@ -1208,12 +1208,6 @@ pub const graphicalcontext = struct {
         }
     }
 };
-
-const queuestr = struct {
-    queue: vk.VkQueue,
-    familyindex: u32,
-};
-
 const png = @cImport({
     @cInclude("png.h");
 });
