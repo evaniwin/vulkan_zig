@@ -140,8 +140,8 @@ fn drawframe(vkinstance: *utilty.graphicalcontext) !void {
     }
     try updateuniformbuffer(currentframe, vkinstance);
     _ = vk.vkResetFences(vkinstance.logicaldevice.device, 1, &vkinstance.inflightfences[currentframe]);
-    _ = vk.vkResetCommandBuffer(vkinstance.commandbuffers[currentframe], 0);
-    try vkinstance.recordcommandbuffer(vkinstance.commandbuffers[currentframe], imageindex);
+    _ = vk.vkResetCommandBuffer(vkinstance.commandpool.commandbuffers[0][currentframe], 0);
+    try vkinstance.recordcommandbuffer(vkinstance.commandpool.commandbuffers[0][currentframe], imageindex);
 
     var submitinfo: vk.VkSubmitInfo = .{};
     submitinfo.sType = vk.VK_STRUCTURE_TYPE_SUBMIT_INFO;
@@ -152,7 +152,7 @@ fn drawframe(vkinstance: *utilty.graphicalcontext) !void {
     submitinfo.pWaitSemaphores = &waitsemaphores[0];
     submitinfo.pWaitDstStageMask = &waitstages[0];
     submitinfo.commandBufferCount = 1;
-    submitinfo.pCommandBuffers = &vkinstance.commandbuffers[currentframe];
+    submitinfo.pCommandBuffers = &vkinstance.commandpool.commandbuffers[0][currentframe];
 
     var signalsemaphores: [1]vk.VkSemaphore = .{vkinstance.renderfinishedsephamores[imageindex]};
     submitinfo.signalSemaphoreCount = 1;
