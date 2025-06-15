@@ -1,14 +1,16 @@
 pub const commandpoolcreateinfo = struct {
     allocator: std.mem.Allocator,
-    logicaldevice: vklogicaldevice.LogicalDevice,
+    logicaldevice: *vklogicaldevice.LogicalDevice,
     queueFamilyIndex: u32,
-    commandbuffergroups: u32,
+    flags: vk.VkCommandPoolCreateFlags,
+    commandbuffers: u32,
 };
 pub const commandpool = struct {
     allocator: std.mem.Allocator,
-    logicaldevice: vklogicaldevice.LogicalDevice,
+    logicaldevice: *vklogicaldevice.LogicalDevice,
     commandpool: vk.VkCommandPool,
     queueFamilyIndex: u32,
+    flags: vk.VkCommandPoolCreateFlags,
     commandbuffers: [][]vk.VkCommandBuffer,
     commandbuffersallocated: []bool,
 
@@ -17,15 +19,16 @@ pub const commandpool = struct {
         self.allocator = commandpoolcreateparams.allocator;
         self.logicaldevice = commandpoolcreateparams.logicaldevice;
         self.queueFamilyIndex = commandpoolcreateparams.queueFamilyIndex;
-        self.commandbuffers = try self.allocator.alloc([]vk.VkCommandBuffer, commandpoolcreateparams.commandbuffergroups);
-        self.commandbuffersallocated = try self.allocator.alloc([]bool, commandpoolcreateparams.commandbuffergroups);
-        for (0..commandpoolcreateparams.commandbuffergroups) |i| {
+        self.flags = commandpoolcreateparams.flags;
+        self.commandbuffers = try self.allocator.alloc([]vk.VkCommandBuffer, commandpoolcreateparams.commandbuffers);
+        self.commandbuffersallocated = try self.allocator.alloc(bool, commandpoolcreateparams.commandbuffers);
+        for (0..commandpoolcreateparams.commandbuffers) |i| {
             self.commandbuffersallocated[i] = false;
         }
 
         var Commandpoolcreateinfo: vk.VkCommandPoolCreateInfo = .{};
         Commandpoolcreateinfo.sType = vk.VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
-        Commandpoolcreateinfo.flags = vk.VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+        Commandpoolcreateinfo.flags = self.flags;
         Commandpoolcreateinfo.queueFamilyIndex = self.queueFamilyIndex;
 
         if (vk.vkCreateCommandPool(self.logicaldevice.device, &Commandpoolcreateinfo, null, &self.commandpool) != vk.VK_SUCCESS) {
@@ -41,7 +44,7 @@ pub const commandpool = struct {
             return error.UnableToCreateNewCommandBufferGroup;
         }
         if (self.commandbuffersallocated[index]) {
-            std.log.err("Index already in use by another command buffer group", .{self.commandbuffers.len});
+            std.log.err("Index already in use by another command buffer group", .{});
             return error.UnableToCreateNewCommandBufferGroup;
         }
         self.commandbuffers[index] = try self.allocator.alloc(vk.VkCommandBuffer, count);
@@ -52,7 +55,7 @@ pub const commandpool = struct {
         allocinfo.commandPool = self.commandpool;
         allocinfo.level = commandbufferlevel;
         allocinfo.commandBufferCount = count;
-        if (vk.vkAllocateCommandBuffers(self.logicaldevice.device, &allocinfo, self.commandbuffers[index]) != vk.VK_SUCCESS) {
+        if (vk.vkAllocateCommandBuffers(self.logicaldevice.device, &allocinfo, &self.commandbuffers[index][0]) != vk.VK_SUCCESS) {
             std.log.err("Unable to create Command buffer", .{});
             return error.CommandBufferAllocationFailed;
         }
@@ -63,22 +66,22 @@ pub const commandpool = struct {
             return;
         }
         if (!self.commandbuffersallocated[index]) {
-            std.log.err("Index is not used by any group", .{self.commandbuffers.len});
+            std.log.err("Index is not used by any group", .{});
             return;
         }
 
-        vk.vkFreeCommandBuffers(self.logicaldevice.device, self.commandpool, 1, self.commandbuffers[index]);
+        vk.vkFreeCommandBuffers(self.logicaldevice.device, self.commandpool, 1, &self.commandbuffers[index][0]);
 
         self.allocator.free(self.commandbuffers[index]);
         self.commandbuffersallocated[index] = false;
     }
     pub fn free(self: *commandpool) void {
-        vk.vkDestroyCommandPool(self.logicaldevice.device, self.commandpool, null);
         for (0..self.commandbuffers.len) |i| {
             if (self.commandbuffersallocated[i]) {
-                self.freecommandbuffer(i);
+                self.freecommandbuffer(@intCast(i));
             }
         }
+        vk.vkDestroyCommandPool(self.logicaldevice.device, self.commandpool, null);
         self.allocator.free(self.commandbuffers);
         self.allocator.free(self.commandbuffersallocated);
         self.allocator.destroy(self);
