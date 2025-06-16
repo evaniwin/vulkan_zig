@@ -195,6 +195,114 @@ pub fn createdescriptorsetlayout(logicaldevice: *vklogicaldevice.LogicalDevice, 
 pub fn destroydescriptorsetlayout(logicaldevice: *vklogicaldevice.LogicalDevice, descriptorsetlayout: vk.VkDescriptorSetLayout) void {
     vk.vkDestroyDescriptorSetLayout(logicaldevice.device, descriptorsetlayout, null);
 }
+
+pub const descriptorpoolcreateinfo = struct {
+    allocator: std.mem.Allocator,
+    logicaldevice: *vklogicaldevice.LogicalDevice,
+    descriptorsetlayout: vk.VkDescriptorSetLayout,
+    descriptorcount: u32,
+};
+pub const descriptorpool = struct {
+    allocator: std.mem.Allocator,
+    logicaldevice: *vklogicaldevice.LogicalDevice,
+    descriptorsetlayout: vk.VkDescriptorSetLayout,
+    descriptorpool: vk.VkDescriptorPool,
+    descriptorcount: u32,
+    descriptorsets: []vk.VkDescriptorSet,
+    pub fn createdescriptorpool(descriptorpoolcreateparams: descriptorpoolcreateinfo) !*descriptorpool {
+        const self: *descriptorpool = try descriptorpoolcreateparams.allocator.create(descriptorpool);
+        self.allocator = descriptorpoolcreateparams.allocator;
+        self.logicaldevice = descriptorpoolcreateparams.logicaldevice;
+        self.descriptorcount = descriptorpoolcreateparams.descriptorcount;
+        self.descriptorsetlayout = descriptorpoolcreateparams.descriptorsetlayout;
+
+        var descriptorpoolsizes: [2]vk.VkDescriptorPoolSize = undefined;
+        descriptorpoolsizes[0].type = vk.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        descriptorpoolsizes[0].descriptorCount = self.descriptorcount;
+        descriptorpoolsizes[1].type = vk.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        descriptorpoolsizes[1].descriptorCount = self.descriptorcount;
+
+        var poolcreateinfo: vk.VkDescriptorPoolCreateInfo = .{};
+        poolcreateinfo.sType = vk.VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+        poolcreateinfo.poolSizeCount = @intCast(descriptorpoolsizes.len);
+        poolcreateinfo.pPoolSizes = &descriptorpoolsizes[0];
+        poolcreateinfo.maxSets = self.descriptorcount;
+
+        if (vk.vkCreateDescriptorPool(self.logicaldevice.device, &poolcreateinfo, null, &self.descriptorpool) != vk.VK_SUCCESS) {
+            std.log.err("Unable to create Descriptor Pool", .{});
+            return error.FailedToCreateDescriptorPool;
+        }
+        return self;
+    }
+    pub fn destroydescriptorpool(self: *descriptorpool) void {
+        vk.vkDestroyDescriptorPool(self.logicaldevice.device, self.descriptorpool, null);
+        self.destroydescriptorSets();
+        self.allocator.destroy(self);
+    }
+    pub fn createdescriptorSets(
+        self: *descriptorpool,
+        uniformbuffer: []vk.VkBuffer,
+        textureimageview: vk.VkImageView,
+        textureimagesampler: vk.VkSampler,
+    ) !void {
+        var descriptorsetlayouts: []vk.VkDescriptorSetLayout = try self.allocator.alloc(vk.VkDescriptorSetLayout, self.descriptorcount);
+        defer self.allocator.free(descriptorsetlayouts);
+        for (0..self.descriptorcount) |i| {
+            descriptorsetlayouts[i] = self.descriptorsetlayout;
+        }
+        self.descriptorsets = try self.allocator.alloc(vk.VkDescriptorSet, self.descriptorcount);
+
+        var descriptorsetallocinfo: vk.VkDescriptorSetAllocateInfo = .{};
+        descriptorsetallocinfo.sType = vk.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        descriptorsetallocinfo.descriptorPool = self.descriptorpool;
+        descriptorsetallocinfo.descriptorSetCount = @intCast(self.descriptorcount);
+        descriptorsetallocinfo.pSetLayouts = &descriptorsetlayouts[0];
+
+        if (vk.vkAllocateDescriptorSets(self.logicaldevice.device, &descriptorsetallocinfo, &self.descriptorsets[0]) != vk.VK_SUCCESS) {
+            std.log.err("Unable to create Descriptor Sets", .{});
+            return error.FailedToCreateDescriptorSets;
+        }
+        for (0..self.descriptorcount) |i| {
+            var bufferinfo: vk.VkDescriptorBufferInfo = .{};
+            bufferinfo.buffer = uniformbuffer[i];
+            bufferinfo.offset = 0;
+            bufferinfo.range = @sizeOf(drawing.uniformbufferobject);
+
+            var imageinfo: vk.VkDescriptorImageInfo = .{};
+            imageinfo.imageLayout = vk.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            imageinfo.imageView = textureimageview;
+            imageinfo.sampler = textureimagesampler;
+
+            var writedescriptorset: [2]vk.VkWriteDescriptorSet = undefined;
+            writedescriptorset[0].sType = vk.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            writedescriptorset[0].dstSet = self.descriptorsets[i];
+            writedescriptorset[0].dstBinding = 0;
+            writedescriptorset[0].dstArrayElement = 0;
+            writedescriptorset[0].descriptorType = vk.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+            writedescriptorset[0].descriptorCount = 1;
+            writedescriptorset[0].pBufferInfo = &bufferinfo;
+            writedescriptorset[0].pImageInfo = null;
+            writedescriptorset[0].pTexelBufferView = null;
+            writedescriptorset[0].pNext = null;
+
+            writedescriptorset[1].sType = vk.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            writedescriptorset[1].dstSet = self.descriptorsets[i];
+            writedescriptorset[1].dstBinding = 1;
+            writedescriptorset[1].dstArrayElement = 0;
+            writedescriptorset[1].descriptorType = vk.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            writedescriptorset[1].descriptorCount = 1;
+            writedescriptorset[1].pBufferInfo = null;
+            writedescriptorset[1].pImageInfo = &imageinfo;
+            writedescriptorset[1].pTexelBufferView = null;
+            writedescriptorset[1].pNext = null;
+
+            vk.vkUpdateDescriptorSets(self.logicaldevice.device, writedescriptorset.len, &writedescriptorset[0], 0, null);
+        }
+    }
+    fn destroydescriptorSets(self: *descriptorpool) void {
+        self.allocator.free(self.descriptorsets);
+    }
+};
 const vertexbufferconfig = struct {
     pub fn getbindingdescription(T: type) vk.VkVertexInputBindingDescription {
         var bindingdescription: vk.VkVertexInputBindingDescription = .{};
