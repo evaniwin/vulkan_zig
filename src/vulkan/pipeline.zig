@@ -195,7 +195,8 @@ pub fn createdescriptorsetlayout(logicaldevice: *vklogicaldevice.LogicalDevice, 
 pub fn destroydescriptorsetlayout(logicaldevice: *vklogicaldevice.LogicalDevice, descriptorsetlayout: vk.VkDescriptorSetLayout) void {
     vk.vkDestroyDescriptorSetLayout(logicaldevice.device, descriptorsetlayout, null);
 }
-const descriptorpoolcreateinfo = struct {
+
+pub const descriptorpoolcreateinfo = struct {
     allocator: std.mem.Allocator,
     logicaldevice: *vklogicaldevice.LogicalDevice,
     descriptorsetlayout: vk.VkDescriptorSetLayout,
@@ -209,7 +210,7 @@ pub const descriptorpool = struct {
     descriptorcount: u32,
     descriptorsets: []vk.VkDescriptorSet,
     pub fn createdescriptorpool(descriptorpoolcreateparams: descriptorpoolcreateinfo) !*descriptorpool {
-        const self: *descriptorpool = descriptorpoolcreateparams.allocator.create(descriptorpool);
+        const self: *descriptorpool = try descriptorpoolcreateparams.allocator.create(descriptorpool);
         self.allocator = descriptorpoolcreateparams.allocator;
         self.logicaldevice = descriptorpoolcreateparams.logicaldevice;
         self.descriptorcount = descriptorpoolcreateparams.descriptorcount;
@@ -231,6 +232,7 @@ pub const descriptorpool = struct {
             std.log.err("Unable to create Descriptor Pool", .{});
             return error.FailedToCreateDescriptorPool;
         }
+        return self;
     }
     pub fn destroydescriptorpool(self: *descriptorpool) void {
         vk.vkDestroyDescriptorPool(self.logicaldevice.device, self.descriptorpool, null);

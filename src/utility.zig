@@ -24,8 +24,7 @@ pub const graphicalcontext = struct {
     swapchainframebuffers: []vk.VkFramebuffer,
     commandpool: *vkcommandbuffer.commandpool,
     commandpoolonetimecommand: *vkcommandbuffer.commandpool,
-    descriptorpool: vk.VkDescriptorPool,
-    descriptorsets: []vk.VkDescriptorSet,
+    descriptorpool: *vkpipeline.descriptorpool,
 
     vertexbuffer: vk.VkBuffer,
     vertexbuffermemory: vk.VkDeviceMemory,
@@ -139,8 +138,18 @@ pub const graphicalcontext = struct {
         try createvertexbuffer(self);
         try createindexbuffer(self);
         try createuniformbuffers(self);
-        try createdescriptorpool(self);
-        try createdescriptorSets(self);
+        const descriptorpoolcreateparams: vkpipeline.descriptorpoolcreateinfo = .{
+            .allocator = self.allocator,
+            .logicaldevice = self.logicaldevice,
+            .descriptorsetlayout = self.descriptorsetlayout,
+            .descriptorcount = @intCast(self.swapchain.images.len),
+        };
+        self.descriptorpool = try vkpipeline.descriptorpool.createdescriptorpool(descriptorpoolcreateparams);
+        try self.descriptorpool.createdescriptorSets(
+            self.uniformbuffer,
+            self.textureimageview,
+            self.textureimagesampler,
+        );
         try self.commandpool.createcommandbuffer(0, @intCast(self.swapchain.images.len), vk.VK_COMMAND_BUFFER_LEVEL_PRIMARY);
         return self;
     }
@@ -162,8 +171,7 @@ pub const graphicalcontext = struct {
 
         self.model.freemodeldata();
         destroyuniformbuffers(self);
-        destroydescriptorpool(self);
-        destroydescriptorSets(self);
+        self.descriptorpool.destroydescriptorpool();
         vkpipeline.destroydescriptorsetlayout(self.logicaldevice, self.descriptorsetlayout);
         destroyindexbuffer(self);
         destroyvertexbuffer(self);
@@ -219,7 +227,7 @@ pub const graphicalcontext = struct {
         const offsets: [1]vk.VkDeviceSize = .{0};
         vk.vkCmdBindVertexBuffers(commandbuffer, 0, 1, &vertexbuffers[0], &offsets[0]);
         vk.vkCmdBindIndexBuffer(commandbuffer, self.indexbuffer, 0, vk.VK_INDEX_TYPE_UINT32);
-        vk.vkCmdBindDescriptorSets(commandbuffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.pipelinelayout, 0, 1, &self.descriptorsets[imageindex], 0, null);
+        vk.vkCmdBindDescriptorSets(commandbuffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.pipelinelayout, 0, 1, &self.descriptorpool.descriptorsets[imageindex], 0, null);
 
         vk.vkCmdDrawIndexed(commandbuffer, @intCast(self.model.indices.len), 1, 0, 0, 0);
 
@@ -466,85 +474,7 @@ pub const graphicalcontext = struct {
             self.miplevels,
         );
     }
-    fn createdescriptorpool(self: *graphicalcontext) !void {
-        var descriptorpoolsizes: [2]vk.VkDescriptorPoolSize = undefined;
-        descriptorpoolsizes[0].type = vk.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-        descriptorpoolsizes[0].descriptorCount = @intCast(self.swapchain.images.len);
-        descriptorpoolsizes[1].type = vk.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        descriptorpoolsizes[1].descriptorCount = @intCast(self.swapchain.images.len);
 
-        var poolcreateinfo: vk.VkDescriptorPoolCreateInfo = .{};
-        poolcreateinfo.sType = vk.VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-        poolcreateinfo.poolSizeCount = @intCast(descriptorpoolsizes.len);
-        poolcreateinfo.pPoolSizes = &descriptorpoolsizes[0];
-        poolcreateinfo.maxSets = @intCast(self.swapchain.images.len);
-
-        if (vk.vkCreateDescriptorPool(self.logicaldevice.device, &poolcreateinfo, null, &self.descriptorpool) != vk.VK_SUCCESS) {
-            std.log.err("Unable to create Descriptor Pool", .{});
-            return error.FailedToCreateDescriptorPool;
-        }
-    }
-    fn destroydescriptorpool(self: *graphicalcontext) void {
-        vk.vkDestroyDescriptorPool(self.logicaldevice.device, self.descriptorpool, null);
-    }
-    fn createdescriptorSets(self: *graphicalcontext) !void {
-        var descriptorsetlayouts: []vk.VkDescriptorSetLayout = try self.allocator.alloc(vk.VkDescriptorSetLayout, self.swapchain.images.len);
-        defer self.allocator.free(descriptorsetlayouts);
-        for (0..self.swapchain.images.len) |i| {
-            descriptorsetlayouts[i] = self.descriptorsetlayout;
-        }
-        self.descriptorsets = try self.allocator.alloc(vk.VkDescriptorSet, self.swapchain.images.len);
-
-        var descriptorsetallocinfo: vk.VkDescriptorSetAllocateInfo = .{};
-        descriptorsetallocinfo.sType = vk.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-        descriptorsetallocinfo.descriptorPool = self.descriptorpool;
-        descriptorsetallocinfo.descriptorSetCount = @intCast(self.swapchain.images.len);
-        descriptorsetallocinfo.pSetLayouts = &descriptorsetlayouts[0];
-
-        if (vk.vkAllocateDescriptorSets(self.logicaldevice.device, &descriptorsetallocinfo, &self.descriptorsets[0]) != vk.VK_SUCCESS) {
-            std.log.err("Unable to create Descriptor Sets", .{});
-            return error.FailedToCreateDescriptorSets;
-        }
-        for (0..self.swapchain.images.len) |i| {
-            var bufferinfo: vk.VkDescriptorBufferInfo = .{};
-            bufferinfo.buffer = self.uniformbuffer[i];
-            bufferinfo.offset = 0;
-            bufferinfo.range = @sizeOf(drawing.uniformbufferobject);
-
-            var imageinfo: vk.VkDescriptorImageInfo = .{};
-            imageinfo.imageLayout = vk.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-            imageinfo.imageView = self.textureimageview;
-            imageinfo.sampler = self.textureimagesampler;
-
-            var writedescriptorset: [2]vk.VkWriteDescriptorSet = undefined;
-            writedescriptorset[0].sType = vk.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            writedescriptorset[0].dstSet = self.descriptorsets[i];
-            writedescriptorset[0].dstBinding = 0;
-            writedescriptorset[0].dstArrayElement = 0;
-            writedescriptorset[0].descriptorType = vk.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-            writedescriptorset[0].descriptorCount = 1;
-            writedescriptorset[0].pBufferInfo = &bufferinfo;
-            writedescriptorset[0].pImageInfo = null;
-            writedescriptorset[0].pTexelBufferView = null;
-            writedescriptorset[0].pNext = null;
-
-            writedescriptorset[1].sType = vk.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            writedescriptorset[1].dstSet = self.descriptorsets[i];
-            writedescriptorset[1].dstBinding = 1;
-            writedescriptorset[1].dstArrayElement = 0;
-            writedescriptorset[1].descriptorType = vk.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-            writedescriptorset[1].descriptorCount = 1;
-            writedescriptorset[1].pBufferInfo = null;
-            writedescriptorset[1].pImageInfo = &imageinfo;
-            writedescriptorset[1].pTexelBufferView = null;
-            writedescriptorset[1].pNext = null;
-
-            vk.vkUpdateDescriptorSets(self.logicaldevice.device, writedescriptorset.len, &writedescriptorset[0], 0, null);
-        }
-    }
-    fn destroydescriptorSets(self: *graphicalcontext) void {
-        self.allocator.free(self.descriptorsets);
-    }
     fn createuniformbuffers(self: *graphicalcontext) !void {
         const buffersize = @sizeOf(drawing.uniformbufferobject);
         const count = self.swapchain.images.len;
