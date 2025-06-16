@@ -49,8 +49,7 @@ pub const graphicalcontext = struct {
     imageavailablesephamores: []vk.VkSemaphore,
     renderfinishedsephamores: []vk.VkSemaphore,
     inflightfences: []vk.VkFence,
-    vertices: []drawing.data,
-    indices: []u32,
+    model: parseobj.model,
     pub fn init(allocator: std.mem.Allocator, window: *vk.GLFWwindow) !*graphicalcontext {
         //allocate an instance of this struct
         const self: *graphicalcontext = allocator.create(graphicalcontext) catch |err| {
@@ -92,7 +91,7 @@ pub const graphicalcontext = struct {
         };
         self.logicaldevice = try vklogicaldevice.LogicalDevice.createlogicaldevice(logicaldeviceparams);
         //load an obj model
-        try loadmodel(self);
+        try resourceloading.loadmodel(self.allocator, &self.model, "/home/evaniwin/Work/vulkan_zig/resources/teapot.obj");
 
         const swapchaincreateparams: vkswapchain.swapchaincreateinfo = .{
             .allocator = self.allocator,
@@ -161,7 +160,7 @@ pub const graphicalcontext = struct {
 
         self.swapchain.freeswapchain();
 
-        freemodeldata(self);
+        self.model.freemodeldata();
         destroyuniformbuffers(self);
         destroydescriptorpool(self);
         destroydescriptorSets(self);
@@ -222,7 +221,7 @@ pub const graphicalcontext = struct {
         vk.vkCmdBindIndexBuffer(commandbuffer, self.indexbuffer, 0, vk.VK_INDEX_TYPE_UINT32);
         vk.vkCmdBindDescriptorSets(commandbuffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.pipelinelayout, 0, 1, &self.descriptorsets[imageindex], 0, null);
 
-        vk.vkCmdDrawIndexed(commandbuffer, @intCast(self.indices.len), 1, 0, 0, 0);
+        vk.vkCmdDrawIndexed(commandbuffer, @intCast(self.model.indices.len), 1, 0, 0, 0);
 
         vk.vkCmdEndRenderPass(commandbuffer);
 
@@ -303,17 +302,6 @@ pub const graphicalcontext = struct {
         vk.vkDestroyImageView(self.logicaldevice.device, self.colorimageview, null);
         vk.vkDestroyImage(self.logicaldevice.device, self.colorimage, null);
         vk.vkFreeMemory(self.logicaldevice.device, self.colorimagememory, null);
-    }
-    fn loadmodel(self: *graphicalcontext) !void {
-        const object = try parseobj.obj.init(self.allocator, "/home/evaniwin/Work/vulkan_zig/resources/teapot.obj");
-        defer object.deinit();
-        try object.processformatdata();
-        self.vertices = object.vdata;
-        self.indices = object.idata;
-    }
-    fn freemodeldata(self: *graphicalcontext) void {
-        self.allocator.free(self.vertices);
-        self.allocator.free(self.indices);
     }
     fn destroydepthresources(self: *graphicalcontext) void {
         vk.vkDestroyImageView(self.logicaldevice.device, self.depthimageview, null);
@@ -403,84 +391,18 @@ pub const graphicalcontext = struct {
     fn destroytextureimageview(self: *graphicalcontext) void {
         vkimage.destroyimageview(self.logicaldevice, self.textureimageview);
     }
-    //TODO create seperare funciton for loading image
-    fn user_error_fn(pngptr: png.png_structp, error_msg: [*c]const u8) callconv(.c) void {
-        std.log.err("Libpng error: {s}", .{std.mem.span(error_msg)});
-        const errorlibpng: *u8 = @ptrCast(png.png_get_error_ptr(pngptr));
-        errorlibpng.* = 1;
-    }
-
-    fn user_warning_fn(_: png.png_structp, warning_msg: [*c]const u8) callconv(.c) void {
-        std.log.warn("Libpng warning: {s}", .{std.mem.span(warning_msg)});
-    }
-
     fn createtextureimage(self: *graphicalcontext) !void {
-        const dir = std.c.fopen("/home/evaniwin/Work/vulkan_zig/resources/teapot.png", "rb");
-        var errorlibpng: ?u8 = 0;
-        if (dir == null) {
-            std.log.err("unable to open texture file", .{});
-            return error.UnableToOpenTextureFile;
-        }
-        defer _ = std.c.fclose(dir.?);
-        var header: [8]u8 = undefined;
-        const result = std.c.fread(&header, 1, header.len, dir.?);
-        if (header.len != result) {
-            std.log.err("unable to Read texture file", .{});
-            return error.UnableToReadTextureFile;
-        }
-        const is_png = png.png_sig_cmp(&header[0], 0, header.len);
-        if (is_png != 0) {
-            std.log.err("The file signature dosent match a png", .{});
-            return error.FileNotPng;
-        }
-        var pngptr: png.png_structp = png.png_create_read_struct(
-            png.PNG_LIBPNG_VER_STRING,
-            @ptrCast(&errorlibpng),
-            user_error_fn,
-            user_warning_fn,
+        var width: c_uint = undefined;
+        var height: c_uint = undefined;
+
+        const pixels: []u8 = try resourceloading.loadimage(
+            self.allocator,
+            &self.miplevels,
+            &width,
+            &height,
+            "/home/evaniwin/Work/vulkan_zig/resources/teapot.png",
         );
-        if (pngptr == null) {
-            std.log.err("unable to Create png pointer", .{});
-            return error.UnableToCreatePngptr;
-        }
-        var pnginfoptr: png.png_infop = png.png_create_info_struct(pngptr);
-        if (pnginfoptr == null) {
-            std.log.err("unable to Create png info pointer", .{});
-            png.png_destroy_read_struct(&pngptr, null, null);
-            return error.UnableToCreatePngInfoptr;
-        }
-        var pngendinfoptr: png.png_infop = png.png_create_info_struct(pngptr);
-        if (pngendinfoptr == null) {
-            std.log.err("unable to Create png end info pointer", .{});
-            png.png_destroy_read_struct(&pngptr, &pnginfoptr, null);
-            return error.UnableToCreatePngEndInfoptr;
-        }
-
-        defer png.png_destroy_read_struct(&pngptr, &pnginfoptr, &pngendinfoptr);
-
-        png.png_init_io(pngptr, @ptrCast(dir));
-        png.png_set_sig_bytes(pngptr, header.len);
-        png.png_read_info(pngptr, pnginfoptr);
-
-        png.png_set_expand(pngptr);
-        png.png_set_strip_16(pngptr);
-        png.png_set_palette_to_rgb(pngptr);
-        png.png_set_gray_to_rgb(pngptr);
-        png.png_set_add_alpha(pngptr, 0xFF, png.PNG_FILLER_AFTER);
-
-        const width = png.png_get_image_width(pngptr, pnginfoptr);
-        const height = png.png_get_image_height(pngptr, pnginfoptr);
-
-        self.miplevels = @intFromFloat(std.math.floor(std.math.log2(@as(f32, @floatFromInt(@max(width, height))))));
-
-        const pixels: []u8 = try self.allocator.alloc(u8, height * width * 4);
         defer self.allocator.free(pixels);
-        const rows: []png.png_bytep = try self.allocator.alloc(png.png_bytep, height);
-        defer self.allocator.free(rows);
-        for (0..height) |i| {
-            rows[i] = &pixels[i * width * 4];
-        }
-        png.png_read_image(pngptr, &rows[0]);
 
         const imagesize: vk.VkDeviceSize = height * width * 4;
 
@@ -652,7 +574,7 @@ pub const graphicalcontext = struct {
         self.allocator.free(self.uniformbuffermemotymapped);
     }
     fn createindexbuffer(self: *graphicalcontext) !void {
-        const buffersize = @sizeOf(u32) * self.indices.len;
+        const buffersize = @sizeOf(u32) * self.model.indices.len;
         var stagingbuffer: vk.VkBuffer = undefined;
         var stagingbuffermemory: vk.VkDeviceMemory = undefined;
         try vkbuffer.createbuffer(
@@ -669,7 +591,7 @@ pub const graphicalcontext = struct {
             stagingbuffermemory,
             buffersize,
             u32,
-            self.indices,
+            self.model.indices,
         );
         try vkbuffer.createbuffer(
             self.logicaldevice,
@@ -689,7 +611,7 @@ pub const graphicalcontext = struct {
         vk.vkFreeMemory(self.logicaldevice.device, self.indexbuffermemory, null);
     }
     fn createvertexbuffer(self: *graphicalcontext) !void {
-        const buffersize = @sizeOf(drawing.data) * self.vertices.len;
+        const buffersize = @sizeOf(drawing.data) * self.model.vertices.len;
         var stagingbuffer: vk.VkBuffer = undefined;
         var stagingbuffermemory: vk.VkDeviceMemory = undefined;
         try vkbuffer.createbuffer(
@@ -706,7 +628,7 @@ pub const graphicalcontext = struct {
             stagingbuffermemory,
             buffersize,
             drawing.data,
-            self.vertices,
+            self.model.vertices,
         );
         try vkbuffer.createbuffer(
             self.logicaldevice,
@@ -812,9 +734,7 @@ pub const graphicalcontext = struct {
         }
     }
 };
-const png = @cImport({
-    @cInclude("png.h");
-});
+
 const c = @cImport({
     @cInclude("setjmp.h");
 });
@@ -830,6 +750,7 @@ const vkrenderpass = @import("vulkan/renderpass.zig");
 const vkpipeline = @import("vulkan/pipeline.zig");
 const vkcommandbuffer = @import("vulkan/commandbuffer.zig");
 const vkbuffer = @import("vulkan/buffer.zig");
+const resourceloading = @import("resourceloading.zig");
 const helper = @import("helpers.zig");
 const main = @import("main.zig");
 const std = @import("std");
