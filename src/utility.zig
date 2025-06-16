@@ -49,7 +49,6 @@ pub const graphicalcontext = struct {
     imageavailablesephamores: []vk.VkSemaphore,
     renderfinishedsephamores: []vk.VkSemaphore,
     inflightfences: []vk.VkFence,
-    temperorycommandbufferinuse: vk.VkFence,
     vertices: []drawing.data,
     indices: []u32,
     pub fn init(allocator: std.mem.Allocator, window: *vk.GLFWwindow) !*graphicalcontext {
@@ -502,21 +501,22 @@ pub const graphicalcontext = struct {
 
         var stagingbuffer: vk.VkBuffer = undefined;
         var stagingbuffermemory: vk.VkDeviceMemory = undefined;
-        try createbuffer(
-            self,
+        try vkbuffer.createbuffer(
+            self.logicaldevice,
+            self.physicaldevice,
             imagesize,
             vk.VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
             vk.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | vk.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
             &stagingbuffer,
             &stagingbuffermemory,
         );
-
-        var memdata: ?*anyopaque = undefined;
-        _ = vk.vkMapMemory(self.logicaldevice.device, stagingbuffermemory, 0, imagesize, 0, &memdata);
-        const ptr: [*]u8 = @ptrCast(@alignCast(memdata));
-        std.mem.copyForwards(u8, ptr[0..pixels.len], pixels);
-        _ = vk.vkUnmapMemory(self.logicaldevice.device, stagingbuffermemory);
-
+        vkbuffer.copydatatobuffer(
+            self.logicaldevice,
+            stagingbuffermemory,
+            imagesize,
+            u8,
+            pixels,
+        );
         try createimage(
             self,
             self.logicaldevice.device,
@@ -566,7 +566,7 @@ pub const graphicalcontext = struct {
             std.log.err("Minmap generation failed: Device does not suppert linear blitting", .{});
             return error.MinmapGenerationFailed;
         }
-        const commandbuffer: vk.VkCommandBuffer = try self.beginsingletimecommands(0);
+        const commandbuffer: vk.VkCommandBuffer = try vkcommandbuffer.beginsingletimecommands(self.commandpoolonetimecommand, 0);
         var mipwidth: i32 = @intCast(imgwidth);
         var mipheight: i32 = @intCast(imgheight);
         var barrier: vk.VkImageMemoryBarrier = .{};
@@ -669,7 +669,7 @@ pub const graphicalcontext = struct {
             1,
             &barrier,
         );
-        try self.endsingletimecommands(commandbuffer, 0);
+        try vkcommandbuffer.endsingletimecommands(self.commandpoolonetimecommand, commandbuffer, 0);
     }
     fn createimage(
         self: *graphicalcontext,
@@ -711,7 +711,7 @@ pub const graphicalcontext = struct {
         var allocationinfo: vk.VkMemoryAllocateInfo = .{};
         allocationinfo.sType = vk.VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
         allocationinfo.allocationSize = memoryrequirements.size;
-        allocationinfo.memoryTypeIndex = try findmemorytype(self, memoryrequirements.memoryTypeBits, memproperties);
+        allocationinfo.memoryTypeIndex = try vkbuffer.findmemorytype(self.physicaldevice, memoryrequirements.memoryTypeBits, memproperties);
         if (vk.vkAllocateMemory(device, &allocationinfo, null, imagememory) != vk.VK_SUCCESS) {
             std.log.err("Unable to create Texture Image Memory", .{});
             return error.FailedToCreateTextureImageMemory;
@@ -719,7 +719,7 @@ pub const graphicalcontext = struct {
         _ = vk.vkBindImageMemory(device, image.*, imagememory.*, 0);
     }
     fn copybuffertoimage(self: *graphicalcontext, buffer: vk.VkBuffer, image: vk.VkImage, width: u32, height: u32) !void {
-        const commandbuffer: vk.VkCommandBuffer = try self.beginsingletimecommands(0);
+        const commandbuffer: vk.VkCommandBuffer = try vkcommandbuffer.beginsingletimecommands(self.commandpoolonetimecommand, 0);
 
         var region: vk.VkBufferImageCopy = .{};
         region.bufferOffset = 0;
@@ -745,10 +745,10 @@ pub const graphicalcontext = struct {
             1,
             &region,
         );
-        try self.endsingletimecommands(commandbuffer, 0);
+        try vkcommandbuffer.endsingletimecommands(self.commandpoolonetimecommand, commandbuffer, 0);
     }
     fn transitionimagelayout(self: *graphicalcontext, image: vk.VkImage, format: vk.VkFormat, oldlayout: vk.VkImageLayout, newlayout: vk.VkImageLayout, miplevels: u32) !void {
-        const commandbuffer: vk.VkCommandBuffer = try self.beginsingletimecommands(0);
+        const commandbuffer: vk.VkCommandBuffer = try vkcommandbuffer.beginsingletimecommands(self.commandpoolonetimecommand, 0);
         var barrier: vk.VkImageMemoryBarrier = .{};
         barrier.sType = vk.VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
         barrier.oldLayout = oldlayout;
@@ -808,7 +808,7 @@ pub const graphicalcontext = struct {
             &barrier,
         );
 
-        try self.endsingletimecommands(commandbuffer, 0);
+        try vkcommandbuffer.endsingletimecommands(self.commandpoolonetimecommand, commandbuffer, 0);
     }
     fn createdescriptorpool(self: *graphicalcontext) !void {
         var descriptorpoolsizes: [2]vk.VkDescriptorPoolSize = undefined;
@@ -896,8 +896,9 @@ pub const graphicalcontext = struct {
         self.uniformbuffermemory = try self.allocator.alloc(vk.VkDeviceMemory, count);
         self.uniformbuffermemotymapped = try self.allocator.alloc(?*anyopaque, count);
         for (0..count) |i| {
-            try createbuffer(
-                self,
+            try vkbuffer.createbuffer(
+                self.logicaldevice,
+                self.physicaldevice,
                 buffersize,
                 vk.VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
                 vk.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | vk.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
@@ -920,30 +921,32 @@ pub const graphicalcontext = struct {
         const buffersize = @sizeOf(u32) * self.indices.len;
         var stagingbuffer: vk.VkBuffer = undefined;
         var stagingbuffermemory: vk.VkDeviceMemory = undefined;
-        try createbuffer(
-            self,
+        try vkbuffer.createbuffer(
+            self.logicaldevice,
+            self.physicaldevice,
             buffersize,
             vk.VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
             vk.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | vk.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
             &stagingbuffer,
             &stagingbuffermemory,
         );
-
-        var memdata: ?*anyopaque = undefined;
-        _ = vk.vkMapMemory(self.logicaldevice.device, stagingbuffermemory, 0, buffersize, 0, &memdata);
-        const ptr: [*]u32 = @ptrCast(@alignCast(memdata));
-        std.mem.copyForwards(u32, ptr[0..self.indices.len], self.indices);
-        _ = vk.vkUnmapMemory(self.logicaldevice.device, stagingbuffermemory);
-
-        try createbuffer(
-            self,
+        vkbuffer.copydatatobuffer(
+            self.logicaldevice,
+            stagingbuffermemory,
+            buffersize,
+            u32,
+            self.indices,
+        );
+        try vkbuffer.createbuffer(
+            self.logicaldevice,
+            self.physicaldevice,
             buffersize,
             vk.VK_BUFFER_USAGE_INDEX_BUFFER_BIT | vk.VK_BUFFER_USAGE_TRANSFER_DST_BIT,
             vk.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
             &self.indexbuffer,
             &self.indexbuffermemory,
         );
-        try copybuffer(self, stagingbuffer, self.indexbuffer, buffersize);
+        try vkbuffer.copybuffertobuffer(self.commandpoolonetimecommand, stagingbuffer, self.indexbuffer, buffersize);
         vk.vkDestroyBuffer(self.logicaldevice.device, stagingbuffer, null);
         vk.vkFreeMemory(self.logicaldevice.device, stagingbuffermemory, null);
     }
@@ -951,141 +954,42 @@ pub const graphicalcontext = struct {
         vk.vkDestroyBuffer(self.logicaldevice.device, self.indexbuffer, null);
         vk.vkFreeMemory(self.logicaldevice.device, self.indexbuffermemory, null);
     }
-    fn beginsingletimecommands(self: *graphicalcontext, index: u32) !vk.VkCommandBuffer {
-        _ = vk.vkWaitForFences(
-            self.logicaldevice.device,
-            1,
-            &self.temperorycommandbufferinuse,
-            vk.VK_TRUE,
-            std.math.maxInt(u64),
-        );
-        _ = vk.vkResetFences(self.logicaldevice.device, 1, &self.temperorycommandbufferinuse);
-
-        try self.commandpoolonetimecommand.createcommandbuffer(index, 1, vk.VK_COMMAND_BUFFER_LEVEL_PRIMARY);
-        var begininfo: vk.VkCommandBufferBeginInfo = .{};
-        begininfo.sType = vk.VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-        begininfo.flags = vk.VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-
-        if (vk.vkBeginCommandBuffer(self.commandpoolonetimecommand.commandbuffers[index][0], &begininfo) != vk.VK_SUCCESS) {
-            std.log.err("Unable to Begin Recording Commandbufffer datatransfer", .{});
-            return error.FailedToBeginRecordingCommandBuffer;
-        }
-        return self.commandpoolonetimecommand.commandbuffers[index][0];
-    }
-    fn endsingletimecommands(self: *graphicalcontext, commandbuffer: vk.VkCommandBuffer, index: u32) !void {
-        if (vk.vkEndCommandBuffer(commandbuffer) != vk.VK_SUCCESS) {
-            std.log.err("Unable to End Recording Commandbufffer datatransfer", .{});
-            return error.FailedToEndRecordingCommandBuffer;
-        }
-        var submitinfo: vk.VkSubmitInfo = .{};
-        submitinfo.sType = vk.VK_STRUCTURE_TYPE_SUBMIT_INFO;
-        submitinfo.commandBufferCount = 1;
-        submitinfo.pCommandBuffers = &commandbuffer;
-
-        if (vk.vkQueueSubmit(self.logicaldevice.graphicsqueue.queue, 1, &submitinfo, self.temperorycommandbufferinuse) != vk.VK_SUCCESS) {
-            std.log.err("Unable to Submit Queue", .{});
-            return error.QueueSubmissionFailed;
-        }
-        _ = vk.vkWaitForFences(
-            self.logicaldevice.device,
-            1,
-            &self.temperorycommandbufferinuse,
-            vk.VK_TRUE,
-            std.math.maxInt(u64),
-        );
-        self.commandpoolonetimecommand.freecommandbuffer(index);
-    }
-    fn copybuffer(self: *graphicalcontext, srcbuffer: vk.VkBuffer, dstbuffer: vk.VkBuffer, size: vk.VkDeviceSize) !void {
-        const commandbuffer: vk.VkCommandBuffer = try self.beginsingletimecommands(0);
-        var copyregion: vk.VkBufferCopy = .{};
-        copyregion.srcOffset = 0;
-        copyregion.dstOffset = 0;
-        copyregion.size = size;
-        vk.vkCmdCopyBuffer(commandbuffer, srcbuffer, dstbuffer, 1, &copyregion);
-        try self.endsingletimecommands(commandbuffer, 0);
-    }
     fn createvertexbuffer(self: *graphicalcontext) !void {
         const buffersize = @sizeOf(drawing.data) * self.vertices.len;
         var stagingbuffer: vk.VkBuffer = undefined;
         var stagingbuffermemory: vk.VkDeviceMemory = undefined;
-        try createbuffer(
-            self,
+        try vkbuffer.createbuffer(
+            self.logicaldevice,
+            self.physicaldevice,
             buffersize,
             vk.VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
             vk.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | vk.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
             &stagingbuffer,
             &stagingbuffermemory,
         );
-
-        var memdata: ?*anyopaque = undefined;
-        _ = vk.vkMapMemory(self.logicaldevice.device, stagingbuffermemory, 0, buffersize, 0, &memdata);
-        const ptr: [*]drawing.data = @ptrCast(@alignCast(memdata));
-        std.mem.copyForwards(drawing.data, ptr[0..self.vertices.len], self.vertices);
-        _ = vk.vkUnmapMemory(self.logicaldevice.device, stagingbuffermemory);
-
-        try createbuffer(
-            self,
+        vkbuffer.copydatatobuffer(
+            self.logicaldevice,
+            stagingbuffermemory,
+            buffersize,
+            drawing.data,
+            self.vertices,
+        );
+        try vkbuffer.createbuffer(
+            self.logicaldevice,
+            self.physicaldevice,
             buffersize,
             vk.VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | vk.VK_BUFFER_USAGE_TRANSFER_DST_BIT,
             vk.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
             &self.vertexbuffer,
             &self.vertexbuffermemory,
         );
-        try copybuffer(self, stagingbuffer, self.vertexbuffer, buffersize);
+        try vkbuffer.copybuffertobuffer(self.commandpoolonetimecommand, stagingbuffer, self.vertexbuffer, buffersize);
         vk.vkDestroyBuffer(self.logicaldevice.device, stagingbuffer, null);
         vk.vkFreeMemory(self.logicaldevice.device, stagingbuffermemory, null);
     }
     fn destroyvertexbuffer(self: *graphicalcontext) void {
         vk.vkDestroyBuffer(self.logicaldevice.device, self.vertexbuffer, null);
         vk.vkFreeMemory(self.logicaldevice.device, self.vertexbuffermemory, null);
-    }
-    fn createbuffer(
-        self: *graphicalcontext,
-        buffersize: vk.VkDeviceSize,
-        bufferusageflags: vk.VkBufferUsageFlags,
-        memorypropertiesflags: vk.VkMemoryPropertyFlags,
-        buffer: *vk.VkBuffer,
-        buffermemory: *vk.VkDeviceMemory,
-    ) !void {
-        var buffercreateinfo: vk.VkBufferCreateInfo = .{};
-        buffercreateinfo.sType = vk.VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-        buffercreateinfo.size = buffersize;
-        buffercreateinfo.usage = bufferusageflags;
-        buffercreateinfo.sharingMode = vk.VK_SHARING_MODE_EXCLUSIVE;
-        buffercreateinfo.flags = 0;
-        if (vk.vkCreateBuffer(self.logicaldevice.device, &buffercreateinfo, null, buffer) != vk.VK_SUCCESS) {
-            std.log.err("Unable to create vertex buffer", .{});
-            return error.FailedToCreateVertexBuffer;
-        }
-
-        var memoryrequirements: vk.VkMemoryRequirements = .{};
-        vk.vkGetBufferMemoryRequirements(self.logicaldevice.device, buffer.*, &memoryrequirements);
-
-        var allocationinfo: vk.VkMemoryAllocateInfo = .{};
-        allocationinfo.sType = vk.VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-        allocationinfo.allocationSize = memoryrequirements.size;
-        allocationinfo.memoryTypeIndex = try findmemorytype(
-            self,
-            memoryrequirements.memoryTypeBits,
-            memorypropertiesflags,
-        );
-        if (vk.vkAllocateMemory(self.logicaldevice.device, &allocationinfo, null, buffermemory) != vk.VK_SUCCESS) {
-            std.log.err("Unable to Allocate Gpu Memory", .{});
-            return error.FailedToAllocateGpuMemory;
-        }
-        _ = vk.vkBindBufferMemory(self.logicaldevice.device, buffer.*, buffermemory.*, 0);
-    }
-    fn findmemorytype(self: *graphicalcontext, typefilter: u32, properties: vk.VkMemoryPropertyFlags) !u32 {
-        var memoryproperties: vk.VkPhysicalDeviceMemoryProperties = undefined;
-        vk.vkGetPhysicalDeviceMemoryProperties(self.physicaldevice.physicaldevice, &memoryproperties);
-        for (0..memoryproperties.memoryTypeCount) |i| {
-            if ((typefilter & (@as(u32, 1) << @as(u5, @intCast(i)))) != 0 and (memoryproperties.memoryTypes[i].propertyFlags & properties) != 0) {
-                return @intCast(i);
-            }
-            if (i == std.math.maxInt(u5)) break;
-        }
-        std.log.err("Unable to find suitable memory type", .{});
-        return error.FailedToFindSuitableMemory;
     }
 
     fn destroysyncobjects(self: *graphicalcontext) void {
@@ -1094,7 +998,6 @@ pub const graphicalcontext = struct {
             vk.vkDestroySemaphore(self.logicaldevice.device, self.renderfinishedsephamores[i], null);
             vk.vkDestroyFence(self.logicaldevice.device, self.inflightfences[i], null);
         }
-        vk.vkDestroyFence(self.logicaldevice.device, self.temperorycommandbufferinuse, null);
         self.allocator.free(self.imageavailablesephamores);
         self.allocator.free(self.renderfinishedsephamores);
         self.allocator.free(self.inflightfences);
@@ -1122,10 +1025,6 @@ pub const graphicalcontext = struct {
                 std.log.err("Unable to Create Cpu fence (render)", .{});
                 return error.UnableToCreateFence;
             }
-        }
-        if (vk.vkCreateFence(self.logicaldevice.device, &fencecreateinfo, null, &self.temperorycommandbufferinuse) != vk.VK_SUCCESS) {
-            std.log.err("Unable to Create Cpu fence (datatransfer)", .{});
-            return error.UnableToCreateFence;
         }
     }
 
@@ -1196,6 +1095,7 @@ const vkimage = @import("vulkan/image.zig");
 const vkrenderpass = @import("vulkan/renderpass.zig");
 const vkpipeline = @import("vulkan/pipeline.zig");
 const vkcommandbuffer = @import("vulkan/commandbuffer.zig");
+const vkbuffer = @import("vulkan/buffer.zig");
 const helper = @import("helpers.zig");
 const main = @import("main.zig");
 const std = @import("std");
