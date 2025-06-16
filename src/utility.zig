@@ -49,9 +49,7 @@ pub const graphicalcontext = struct {
     imageavailablesephamores: []vk.VkSemaphore,
     renderfinishedsephamores: []vk.VkSemaphore,
     inflightfences: []vk.VkFence,
-    temperorycommandbufferinuse: vk.VkFence,
-    vertices: []drawing.data,
-    indices: []u32,
+    model: parseobj.model,
     pub fn init(allocator: std.mem.Allocator, window: *vk.GLFWwindow) !*graphicalcontext {
         //allocate an instance of this struct
         const self: *graphicalcontext = allocator.create(graphicalcontext) catch |err| {
@@ -93,7 +91,7 @@ pub const graphicalcontext = struct {
         };
         self.logicaldevice = try vklogicaldevice.LogicalDevice.createlogicaldevice(logicaldeviceparams);
         //load an obj model
-        try loadmodel(self);
+        try resourceloading.loadmodel(self.allocator, &self.model, "/home/evaniwin/Work/vulkan_zig/resources/teapot.obj");
 
         const swapchaincreateparams: vkswapchain.swapchaincreateinfo = .{
             .allocator = self.allocator,
@@ -150,7 +148,7 @@ pub const graphicalcontext = struct {
         destroysyncobjects(self);
         destroytextureimagesampler(self);
         destroytextureimageview(self);
-        destroyimage(self, self.textureimage, self.textureimagememory);
+        vkimage.destroyimage(self.logicaldevice, self.textureimage, self.textureimagememory);
         destroycommandpools(self);
         destroyswapchainframebuffers(self);
         destroydepthresources(self);
@@ -162,7 +160,7 @@ pub const graphicalcontext = struct {
 
         self.swapchain.freeswapchain();
 
-        freemodeldata(self);
+        self.model.freemodeldata();
         destroyuniformbuffers(self);
         destroydescriptorpool(self);
         destroydescriptorSets(self);
@@ -223,7 +221,7 @@ pub const graphicalcontext = struct {
         vk.vkCmdBindIndexBuffer(commandbuffer, self.indexbuffer, 0, vk.VK_INDEX_TYPE_UINT32);
         vk.vkCmdBindDescriptorSets(commandbuffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.pipelinelayout, 0, 1, &self.descriptorsets[imageindex], 0, null);
 
-        vk.vkCmdDrawIndexed(commandbuffer, @intCast(self.indices.len), 1, 0, 0, 0);
+        vk.vkCmdDrawIndexed(commandbuffer, @intCast(self.model.indices.len), 1, 0, 0, 0);
 
         vk.vkCmdEndRenderPass(commandbuffer);
 
@@ -277,8 +275,9 @@ pub const graphicalcontext = struct {
         if (swapchainimageslen != self.swapchain.images.len) @panic("swap chain image length mismatch After Recreation");
     }
     fn createcolorresources(self: *graphicalcontext) !void {
-        try self.createimage(
-            self.logicaldevice.device,
+        try vkimage.createimage(
+            self.physicaldevice,
+            self.logicaldevice,
             self.swapchain.extent.width,
             self.swapchain.extent.height,
             1,
@@ -304,17 +303,6 @@ pub const graphicalcontext = struct {
         vk.vkDestroyImage(self.logicaldevice.device, self.colorimage, null);
         vk.vkFreeMemory(self.logicaldevice.device, self.colorimagememory, null);
     }
-    fn loadmodel(self: *graphicalcontext) !void {
-        const object = try parseobj.obj.init(self.allocator, "/home/evaniwin/Work/vulkan_zig/resources/teapot.obj");
-        defer object.deinit();
-        try object.processformatdata();
-        self.vertices = object.vdata;
-        self.indices = object.idata;
-    }
-    fn freemodeldata(self: *graphicalcontext) void {
-        self.allocator.free(self.vertices);
-        self.allocator.free(self.indices);
-    }
     fn destroydepthresources(self: *graphicalcontext) void {
         vk.vkDestroyImageView(self.logicaldevice.device, self.depthimageview, null);
         vk.vkDestroyImage(self.logicaldevice.device, self.depthimage, null);
@@ -322,9 +310,9 @@ pub const graphicalcontext = struct {
     }
     fn createdepthresources(self: *graphicalcontext) !void {
         const depthformat: vk.VkFormat = try self.finddepthformat();
-        try createimage(
-            self,
-            self.logicaldevice.device,
+        try vkimage.createimage(
+            self.physicaldevice,
+            self.logicaldevice,
             self.swapchain.extent.width,
             self.swapchain.extent.height,
             1,
@@ -344,8 +332,8 @@ pub const graphicalcontext = struct {
             vk.VK_IMAGE_ASPECT_DEPTH_BIT,
             1,
         );
-        try transitionimagelayout(
-            self,
+        try vkimage.transitionimagelayout(
+            self.commandpoolonetimecommand,
             self.depthimage,
             depthformat,
             vk.VK_IMAGE_LAYOUT_UNDEFINED,
@@ -356,28 +344,12 @@ pub const graphicalcontext = struct {
 
     fn finddepthformat(self: *graphicalcontext) !vk.VkFormat {
         var formats: [3]vk.VkFormat = .{ vk.VK_FORMAT_D32_SFLOAT, vk.VK_FORMAT_D32_SFLOAT_S8_UINT, vk.VK_FORMAT_D24_UNORM_S8_UINT };
-        return findsupportedformats(
-            self,
+        return vkimage.findsupportedformats(
+            self.physicaldevice,
             &formats,
             vk.VK_IMAGE_TILING_OPTIMAL,
             vk.VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT,
         );
-    }
-    fn findsupportedformats(self: *graphicalcontext, formatcanadates: []vk.VkFormat, tiling: vk.VkImageTiling, features: vk.VkFormatFeatureFlags) !vk.VkFormat {
-        for (formatcanadates) |format| {
-            var properties: vk.VkFormatProperties = undefined;
-            vk.vkGetPhysicalDeviceFormatProperties(self.physicaldevice.physicaldevice, format, &properties);
-            if (tiling == vk.VK_IMAGE_TILING_LINEAR and ((properties.linearTilingFeatures & features) == features)) {
-                return format;
-            } else if (tiling == vk.VK_IMAGE_TILING_OPTIMAL and ((properties.optimalTilingFeatures & features) == features)) {
-                return format;
-            }
-        }
-        std.log.err("Unable to Find supported format", .{});
-        return error.FailedToFindSupportedImageFormat;
-    }
-    fn checkstencilcomponent(format: vk.VkFormat) bool {
-        return (format == vk.VK_FORMAT_D32_SFLOAT_S8_UINT or format == vk.VK_FORMAT_D24_UNORM_S8_UINT);
     }
     fn createtextureimagesampler(self: *graphicalcontext) !void {
         var samplercreateinfo: vk.VkSamplerCreateInfo = .{};
@@ -419,107 +391,42 @@ pub const graphicalcontext = struct {
     fn destroytextureimageview(self: *graphicalcontext) void {
         vkimage.destroyimageview(self.logicaldevice, self.textureimageview);
     }
-    //TODO create seperare funciton for loading image
-    fn user_error_fn(pngptr: png.png_structp, error_msg: [*c]const u8) callconv(.c) void {
-        std.log.err("Libpng error: {s}", .{std.mem.span(error_msg)});
-        const errorlibpng: *u8 = @ptrCast(png.png_get_error_ptr(pngptr));
-        errorlibpng.* = 1;
-    }
-
-    fn user_warning_fn(_: png.png_structp, warning_msg: [*c]const u8) callconv(.c) void {
-        std.log.warn("Libpng warning: {s}", .{std.mem.span(warning_msg)});
-    }
-
     fn createtextureimage(self: *graphicalcontext) !void {
-        const dir = std.c.fopen("/home/evaniwin/Work/vulkan_zig/resources/teapot.png", "rb");
-        var errorlibpng: ?u8 = 0;
-        if (dir == null) {
-            std.log.err("unable to open texture file", .{});
-            return error.UnableToOpenTextureFile;
-        }
-        defer _ = std.c.fclose(dir.?);
-        var header: [8]u8 = undefined;
-        const result = std.c.fread(&header, 1, header.len, dir.?);
-        if (header.len != result) {
-            std.log.err("unable to Read texture file", .{});
-            return error.UnableToReadTextureFile;
-        }
-        const is_png = png.png_sig_cmp(&header[0], 0, header.len);
-        if (is_png != 0) {
-            std.log.err("The file signature dosent match a png", .{});
-            return error.FileNotPng;
-        }
-        var pngptr: png.png_structp = png.png_create_read_struct(
-            png.PNG_LIBPNG_VER_STRING,
-            @ptrCast(&errorlibpng),
-            user_error_fn,
-            user_warning_fn,
+        var width: c_uint = undefined;
+        var height: c_uint = undefined;
+
+        const pixels: []u8 = try resourceloading.loadimage(
+            self.allocator,
+            &self.miplevels,
+            &width,
+            &height,
+            "/home/evaniwin/Work/vulkan_zig/resources/teapot.png",
         );
-        if (pngptr == null) {
-            std.log.err("unable to Create png pointer", .{});
-            return error.UnableToCreatePngptr;
-        }
-        var pnginfoptr: png.png_infop = png.png_create_info_struct(pngptr);
-        if (pnginfoptr == null) {
-            std.log.err("unable to Create png info pointer", .{});
-            png.png_destroy_read_struct(&pngptr, null, null);
-            return error.UnableToCreatePngInfoptr;
-        }
-        var pngendinfoptr: png.png_infop = png.png_create_info_struct(pngptr);
-        if (pngendinfoptr == null) {
-            std.log.err("unable to Create png end info pointer", .{});
-            png.png_destroy_read_struct(&pngptr, &pnginfoptr, null);
-            return error.UnableToCreatePngEndInfoptr;
-        }
-
-        defer png.png_destroy_read_struct(&pngptr, &pnginfoptr, &pngendinfoptr);
-
-        png.png_init_io(pngptr, @ptrCast(dir));
-        png.png_set_sig_bytes(pngptr, header.len);
-        png.png_read_info(pngptr, pnginfoptr);
-
-        png.png_set_expand(pngptr);
-        png.png_set_strip_16(pngptr);
-        png.png_set_palette_to_rgb(pngptr);
-        png.png_set_gray_to_rgb(pngptr);
-        png.png_set_add_alpha(pngptr, 0xFF, png.PNG_FILLER_AFTER);
-
-        const width = png.png_get_image_width(pngptr, pnginfoptr);
-        const height = png.png_get_image_height(pngptr, pnginfoptr);
-
-        self.miplevels = @intFromFloat(std.math.floor(std.math.log2(@as(f32, @floatFromInt(@max(width, height))))));
-
-        const pixels: []u8 = try self.allocator.alloc(u8, height * width * 4);
         defer self.allocator.free(pixels);
-        const rows: []png.png_bytep = try self.allocator.alloc(png.png_bytep, height);
-        defer self.allocator.free(rows);
-        for (0..height) |i| {
-            rows[i] = &pixels[i * width * 4];
-        }
-        png.png_read_image(pngptr, &rows[0]);
 
         const imagesize: vk.VkDeviceSize = height * width * 4;
 
         var stagingbuffer: vk.VkBuffer = undefined;
         var stagingbuffermemory: vk.VkDeviceMemory = undefined;
-        try createbuffer(
-            self,
+        try vkbuffer.createbuffer(
+            self.logicaldevice,
+            self.physicaldevice,
             imagesize,
             vk.VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
             vk.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | vk.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
             &stagingbuffer,
             &stagingbuffermemory,
         );
-
-        var memdata: ?*anyopaque = undefined;
-        _ = vk.vkMapMemory(self.logicaldevice.device, stagingbuffermemory, 0, imagesize, 0, &memdata);
-        const ptr: [*]u8 = @ptrCast(@alignCast(memdata));
-        std.mem.copyForwards(u8, ptr[0..pixels.len], pixels);
-        _ = vk.vkUnmapMemory(self.logicaldevice.device, stagingbuffermemory);
-
-        try createimage(
-            self,
-            self.logicaldevice.device,
+        vkbuffer.copydatatobuffer(
+            self.logicaldevice,
+            stagingbuffermemory,
+            imagesize,
+            u8,
+            pixels,
+        );
+        try vkimage.createimage(
+            self.physicaldevice,
+            self.logicaldevice,
             width,
             height,
             self.miplevels,
@@ -531,14 +438,16 @@ pub const graphicalcontext = struct {
             &self.textureimage,
             &self.textureimagememory,
         );
-        try self.transitionimagelayout(
+        try vkimage.transitionimagelayout(
+            self.commandpoolonetimecommand,
             self.textureimage,
             vk.VK_FORMAT_R8G8B8A8_SRGB,
             vk.VK_IMAGE_LAYOUT_UNDEFINED,
             vk.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
             self.miplevels,
         );
-        try self.copybuffertoimage(
+        try vkimage.copybuffertoimage(
+            self.commandpoolonetimecommand,
             stagingbuffer,
             self.textureimage,
             width,
@@ -547,268 +456,15 @@ pub const graphicalcontext = struct {
 
         vk.vkDestroyBuffer(self.logicaldevice.device, stagingbuffer, null);
         vk.vkFreeMemory(self.logicaldevice.device, stagingbuffermemory, null);
-        try self.generatemipmaps(
+        try vkimage.generatemipmaps(
+            self.physicaldevice,
+            self.commandpoolonetimecommand,
             self.textureimage,
             vk.VK_FORMAT_R8G8B8A8_SRGB,
             width,
             height,
             self.miplevels,
         );
-    }
-    fn destroyimage(self: *graphicalcontext, image: vk.VkImage, imagememory: vk.VkDeviceMemory) void {
-        vk.vkDestroyImage(self.logicaldevice.device, image, null);
-        vk.vkFreeMemory(self.logicaldevice.device, imagememory, null);
-    }
-    fn generatemipmaps(self: *graphicalcontext, image: vk.VkImage, imageformat: vk.VkFormat, imgwidth: u32, imgheight: u32, miplevels: u32) !void {
-        var formatproperties: vk.VkFormatProperties = .{};
-        vk.vkGetPhysicalDeviceFormatProperties(self.physicaldevice.physicaldevice, imageformat, &formatproperties);
-        if ((formatproperties.optimalTilingFeatures & vk.VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT) == 0) {
-            std.log.err("Minmap generation failed: Device does not suppert linear blitting", .{});
-            return error.MinmapGenerationFailed;
-        }
-        const commandbuffer: vk.VkCommandBuffer = try self.beginsingletimecommands(0);
-        var mipwidth: i32 = @intCast(imgwidth);
-        var mipheight: i32 = @intCast(imgheight);
-        var barrier: vk.VkImageMemoryBarrier = .{};
-        barrier.sType = vk.VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-        barrier.image = image;
-        barrier.srcQueueFamilyIndex = vk.VK_QUEUE_FAMILY_IGNORED;
-        barrier.dstQueueFamilyIndex = vk.VK_QUEUE_FAMILY_IGNORED;
-        barrier.subresourceRange.aspectMask = vk.VK_IMAGE_ASPECT_COLOR_BIT;
-        barrier.subresourceRange.baseArrayLayer = 0;
-        barrier.subresourceRange.levelCount = 1;
-        barrier.subresourceRange.layerCount = 1;
-        for (1..miplevels) |i| {
-            barrier.subresourceRange.baseMipLevel = @intCast(i - 1);
-            barrier.oldLayout = vk.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-            barrier.newLayout = vk.VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-            barrier.srcAccessMask = vk.VK_ACCESS_TRANSFER_WRITE_BIT;
-            barrier.dstAccessMask = vk.VK_ACCESS_TRANSFER_READ_BIT;
-
-            vk.vkCmdPipelineBarrier(
-                commandbuffer,
-                vk.VK_PIPELINE_STAGE_TRANSFER_BIT,
-                vk.VK_PIPELINE_STAGE_TRANSFER_BIT,
-                0,
-                0,
-                null,
-                0,
-                null,
-                1,
-                &barrier,
-            );
-
-            var blit: vk.VkImageBlit = .{};
-            blit.srcOffsets[0] = .{ .x = 0, .y = 0, .z = 0 };
-            blit.srcOffsets[1] = .{ .x = mipwidth, .y = mipheight, .z = 1 };
-            blit.srcSubresource.aspectMask = vk.VK_IMAGE_ASPECT_COLOR_BIT;
-            blit.srcSubresource.mipLevel = @intCast(i - 1);
-            blit.srcSubresource.baseArrayLayer = 0;
-            blit.srcSubresource.layerCount = 1;
-            blit.dstOffsets[0] = .{ .x = 0, .y = 0, .z = 0 };
-
-            if (mipwidth > 1) {
-                mipwidth = @divTrunc(mipwidth, 2);
-            } else {
-                mipwidth = 1;
-            }
-            if (mipheight > 1) {
-                mipheight = @divTrunc(mipheight, 2);
-            } else {
-                mipheight = 1;
-            }
-
-            blit.dstOffsets[1] = .{ .x = mipwidth, .y = mipheight, .z = 1 };
-            blit.dstSubresource.aspectMask = vk.VK_IMAGE_ASPECT_COLOR_BIT;
-            blit.dstSubresource.mipLevel = @intCast(i);
-            blit.dstSubresource.baseArrayLayer = 0;
-            blit.dstSubresource.layerCount = 1;
-
-            vk.vkCmdBlitImage(
-                commandbuffer,
-                image,
-                vk.VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                image,
-                vk.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                1,
-                &blit,
-                vk.VK_FILTER_LINEAR,
-            );
-
-            barrier.oldLayout = vk.VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-            barrier.newLayout = vk.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-            barrier.srcAccessMask = vk.VK_ACCESS_TRANSFER_READ_BIT;
-            barrier.dstAccessMask = vk.VK_ACCESS_SHADER_READ_BIT;
-            vk.vkCmdPipelineBarrier(
-                commandbuffer,
-                vk.VK_PIPELINE_STAGE_TRANSFER_BIT,
-                vk.VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-                0,
-                0,
-                null,
-                0,
-                null,
-                1,
-                &barrier,
-            );
-        }
-        barrier.subresourceRange.baseMipLevel = miplevels - 1;
-        barrier.oldLayout = vk.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-        barrier.newLayout = vk.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        barrier.srcAccessMask = vk.VK_ACCESS_TRANSFER_READ_BIT;
-        barrier.dstAccessMask = vk.VK_ACCESS_SHADER_READ_BIT;
-        vk.vkCmdPipelineBarrier(
-            commandbuffer,
-            vk.VK_PIPELINE_STAGE_TRANSFER_BIT,
-            vk.VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-            0,
-            0,
-            null,
-            0,
-            null,
-            1,
-            &barrier,
-        );
-        try self.endsingletimecommands(commandbuffer, 0);
-    }
-    fn createimage(
-        self: *graphicalcontext,
-        device: vk.VkDevice,
-        width: u32,
-        height: u32,
-        miplevels: u32,
-        numsamples: vk.VkSampleCountFlagBits,
-        format: vk.VkFormat,
-        tiling: vk.VkImageTiling,
-        imageusage: vk.VkImageUsageFlags,
-        memproperties: vk.VkMemoryPropertyFlags,
-        image: *vk.VkImage,
-        imagememory: *vk.VkDeviceMemory,
-    ) !void {
-        var imagecreateinfo: vk.VkImageCreateInfo = .{};
-        imagecreateinfo.sType = vk.VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-        imagecreateinfo.imageType = vk.VK_IMAGE_TYPE_2D;
-        imagecreateinfo.extent.width = width;
-        imagecreateinfo.extent.height = height;
-        imagecreateinfo.extent.depth = 1;
-        imagecreateinfo.mipLevels = miplevels;
-        imagecreateinfo.arrayLayers = 1;
-        imagecreateinfo.format = format;
-        imagecreateinfo.tiling = tiling;
-        imagecreateinfo.initialLayout = vk.VK_IMAGE_LAYOUT_UNDEFINED;
-        imagecreateinfo.usage = imageusage;
-        imagecreateinfo.sharingMode = vk.VK_SHARING_MODE_EXCLUSIVE;
-        imagecreateinfo.samples = numsamples;
-        imagecreateinfo.flags = 0;
-        if (vk.vkCreateImage(device, &imagecreateinfo, null, image) != vk.VK_SUCCESS) {
-            std.log.err("Unable to create Texture Image", .{});
-            return error.FailedToCreateTextureImage;
-        }
-
-        var memoryrequirements: vk.VkMemoryRequirements = .{};
-        vk.vkGetImageMemoryRequirements(device, image.*, &memoryrequirements);
-
-        var allocationinfo: vk.VkMemoryAllocateInfo = .{};
-        allocationinfo.sType = vk.VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-        allocationinfo.allocationSize = memoryrequirements.size;
-        allocationinfo.memoryTypeIndex = try findmemorytype(self, memoryrequirements.memoryTypeBits, memproperties);
-        if (vk.vkAllocateMemory(device, &allocationinfo, null, imagememory) != vk.VK_SUCCESS) {
-            std.log.err("Unable to create Texture Image Memory", .{});
-            return error.FailedToCreateTextureImageMemory;
-        }
-        _ = vk.vkBindImageMemory(device, image.*, imagememory.*, 0);
-    }
-    fn copybuffertoimage(self: *graphicalcontext, buffer: vk.VkBuffer, image: vk.VkImage, width: u32, height: u32) !void {
-        const commandbuffer: vk.VkCommandBuffer = try self.beginsingletimecommands(0);
-
-        var region: vk.VkBufferImageCopy = .{};
-        region.bufferOffset = 0;
-        region.bufferRowLength = 0;
-        region.bufferImageHeight = 0;
-
-        region.imageSubresource.aspectMask = vk.VK_IMAGE_ASPECT_COLOR_BIT;
-        region.imageSubresource.mipLevel = 0;
-        region.imageSubresource.baseArrayLayer = 0;
-        region.imageSubresource.layerCount = 1;
-
-        region.imageOffset = .{ .x = 0, .y = 0, .z = 0 };
-        region.imageExtent = .{
-            .width = width,
-            .height = height,
-            .depth = 1,
-        };
-        vk.vkCmdCopyBufferToImage(
-            commandbuffer,
-            buffer,
-            image,
-            vk.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-            1,
-            &region,
-        );
-        try self.endsingletimecommands(commandbuffer, 0);
-    }
-    fn transitionimagelayout(self: *graphicalcontext, image: vk.VkImage, format: vk.VkFormat, oldlayout: vk.VkImageLayout, newlayout: vk.VkImageLayout, miplevels: u32) !void {
-        const commandbuffer: vk.VkCommandBuffer = try self.beginsingletimecommands(0);
-        var barrier: vk.VkImageMemoryBarrier = .{};
-        barrier.sType = vk.VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-        barrier.oldLayout = oldlayout;
-        barrier.newLayout = newlayout;
-        barrier.srcQueueFamilyIndex = vk.VK_QUEUE_FAMILY_IGNORED;
-        barrier.dstQueueFamilyIndex = vk.VK_QUEUE_FAMILY_IGNORED;
-        barrier.image = image;
-        barrier.subresourceRange.baseMipLevel = 0;
-        barrier.subresourceRange.levelCount = miplevels;
-        barrier.subresourceRange.baseArrayLayer = 0;
-        barrier.subresourceRange.layerCount = 1;
-        if (newlayout == vk.VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL) {
-            barrier.subresourceRange.aspectMask = vk.VK_IMAGE_ASPECT_DEPTH_BIT;
-
-            if (checkstencilcomponent(format)) {
-                barrier.subresourceRange.aspectMask = vk.VK_IMAGE_ASPECT_STENCIL_BIT | vk.VK_IMAGE_ASPECT_DEPTH_BIT;
-            } else {
-                barrier.subresourceRange.aspectMask = vk.VK_IMAGE_ASPECT_DEPTH_BIT;
-            }
-        } else {
-            barrier.subresourceRange.aspectMask = vk.VK_IMAGE_ASPECT_COLOR_BIT;
-        }
-        var sourcestage: vk.VkPipelineStageFlags = undefined;
-        var destinationstage: vk.VkPipelineStageFlags = undefined;
-        if (oldlayout == vk.VK_IMAGE_LAYOUT_UNDEFINED and newlayout == vk.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL) {
-            barrier.srcAccessMask = 0;
-            barrier.dstAccessMask = vk.VK_ACCESS_TRANSFER_WRITE_BIT;
-
-            sourcestage = vk.VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
-            destinationstage = vk.VK_PIPELINE_STAGE_TRANSFER_BIT;
-        } else if (oldlayout == vk.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL and newlayout == vk.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
-            barrier.srcAccessMask = vk.VK_ACCESS_TRANSFER_WRITE_BIT;
-            barrier.dstAccessMask = vk.VK_ACCESS_SHADER_READ_BIT;
-
-            sourcestage = vk.VK_PIPELINE_STAGE_TRANSFER_BIT;
-            destinationstage = vk.VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
-        } else if (oldlayout == vk.VK_IMAGE_LAYOUT_UNDEFINED and newlayout == vk.VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL) {
-            barrier.srcAccessMask = 0;
-            barrier.dstAccessMask = vk.VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | vk.VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-
-            sourcestage = vk.VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
-            destinationstage = vk.VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
-        } else {
-            std.log.err("Unsupported Layout Transition", .{});
-            return error.UnsupportedLayoutTransition;
-        }
-        vk.vkCmdPipelineBarrier(
-            commandbuffer,
-            sourcestage,
-            destinationstage,
-            0,
-            0,
-            null,
-            0,
-            null,
-            1,
-            &barrier,
-        );
-
-        try self.endsingletimecommands(commandbuffer, 0);
     }
     fn createdescriptorpool(self: *graphicalcontext) !void {
         var descriptorpoolsizes: [2]vk.VkDescriptorPoolSize = undefined;
@@ -896,8 +552,9 @@ pub const graphicalcontext = struct {
         self.uniformbuffermemory = try self.allocator.alloc(vk.VkDeviceMemory, count);
         self.uniformbuffermemotymapped = try self.allocator.alloc(?*anyopaque, count);
         for (0..count) |i| {
-            try createbuffer(
-                self,
+            try vkbuffer.createbuffer(
+                self.logicaldevice,
+                self.physicaldevice,
                 buffersize,
                 vk.VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
                 vk.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | vk.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
@@ -917,33 +574,35 @@ pub const graphicalcontext = struct {
         self.allocator.free(self.uniformbuffermemotymapped);
     }
     fn createindexbuffer(self: *graphicalcontext) !void {
-        const buffersize = @sizeOf(u32) * self.indices.len;
+        const buffersize = @sizeOf(u32) * self.model.indices.len;
         var stagingbuffer: vk.VkBuffer = undefined;
         var stagingbuffermemory: vk.VkDeviceMemory = undefined;
-        try createbuffer(
-            self,
+        try vkbuffer.createbuffer(
+            self.logicaldevice,
+            self.physicaldevice,
             buffersize,
             vk.VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
             vk.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | vk.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
             &stagingbuffer,
             &stagingbuffermemory,
         );
-
-        var memdata: ?*anyopaque = undefined;
-        _ = vk.vkMapMemory(self.logicaldevice.device, stagingbuffermemory, 0, buffersize, 0, &memdata);
-        const ptr: [*]u32 = @ptrCast(@alignCast(memdata));
-        std.mem.copyForwards(u32, ptr[0..self.indices.len], self.indices);
-        _ = vk.vkUnmapMemory(self.logicaldevice.device, stagingbuffermemory);
-
-        try createbuffer(
-            self,
+        vkbuffer.copydatatobuffer(
+            self.logicaldevice,
+            stagingbuffermemory,
+            buffersize,
+            u32,
+            self.model.indices,
+        );
+        try vkbuffer.createbuffer(
+            self.logicaldevice,
+            self.physicaldevice,
             buffersize,
             vk.VK_BUFFER_USAGE_INDEX_BUFFER_BIT | vk.VK_BUFFER_USAGE_TRANSFER_DST_BIT,
             vk.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
             &self.indexbuffer,
             &self.indexbuffermemory,
         );
-        try copybuffer(self, stagingbuffer, self.indexbuffer, buffersize);
+        try vkbuffer.copybuffertobuffer(self.commandpoolonetimecommand, stagingbuffer, self.indexbuffer, buffersize);
         vk.vkDestroyBuffer(self.logicaldevice.device, stagingbuffer, null);
         vk.vkFreeMemory(self.logicaldevice.device, stagingbuffermemory, null);
     }
@@ -951,141 +610,42 @@ pub const graphicalcontext = struct {
         vk.vkDestroyBuffer(self.logicaldevice.device, self.indexbuffer, null);
         vk.vkFreeMemory(self.logicaldevice.device, self.indexbuffermemory, null);
     }
-    fn beginsingletimecommands(self: *graphicalcontext, index: u32) !vk.VkCommandBuffer {
-        _ = vk.vkWaitForFences(
-            self.logicaldevice.device,
-            1,
-            &self.temperorycommandbufferinuse,
-            vk.VK_TRUE,
-            std.math.maxInt(u64),
-        );
-        _ = vk.vkResetFences(self.logicaldevice.device, 1, &self.temperorycommandbufferinuse);
-
-        try self.commandpoolonetimecommand.createcommandbuffer(index, 1, vk.VK_COMMAND_BUFFER_LEVEL_PRIMARY);
-        var begininfo: vk.VkCommandBufferBeginInfo = .{};
-        begininfo.sType = vk.VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-        begininfo.flags = vk.VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-
-        if (vk.vkBeginCommandBuffer(self.commandpoolonetimecommand.commandbuffers[index][0], &begininfo) != vk.VK_SUCCESS) {
-            std.log.err("Unable to Begin Recording Commandbufffer datatransfer", .{});
-            return error.FailedToBeginRecordingCommandBuffer;
-        }
-        return self.commandpoolonetimecommand.commandbuffers[index][0];
-    }
-    fn endsingletimecommands(self: *graphicalcontext, commandbuffer: vk.VkCommandBuffer, index: u32) !void {
-        if (vk.vkEndCommandBuffer(commandbuffer) != vk.VK_SUCCESS) {
-            std.log.err("Unable to End Recording Commandbufffer datatransfer", .{});
-            return error.FailedToEndRecordingCommandBuffer;
-        }
-        var submitinfo: vk.VkSubmitInfo = .{};
-        submitinfo.sType = vk.VK_STRUCTURE_TYPE_SUBMIT_INFO;
-        submitinfo.commandBufferCount = 1;
-        submitinfo.pCommandBuffers = &commandbuffer;
-
-        if (vk.vkQueueSubmit(self.logicaldevice.graphicsqueue.queue, 1, &submitinfo, self.temperorycommandbufferinuse) != vk.VK_SUCCESS) {
-            std.log.err("Unable to Submit Queue", .{});
-            return error.QueueSubmissionFailed;
-        }
-        _ = vk.vkWaitForFences(
-            self.logicaldevice.device,
-            1,
-            &self.temperorycommandbufferinuse,
-            vk.VK_TRUE,
-            std.math.maxInt(u64),
-        );
-        self.commandpoolonetimecommand.freecommandbuffer(index);
-    }
-    fn copybuffer(self: *graphicalcontext, srcbuffer: vk.VkBuffer, dstbuffer: vk.VkBuffer, size: vk.VkDeviceSize) !void {
-        const commandbuffer: vk.VkCommandBuffer = try self.beginsingletimecommands(0);
-        var copyregion: vk.VkBufferCopy = .{};
-        copyregion.srcOffset = 0;
-        copyregion.dstOffset = 0;
-        copyregion.size = size;
-        vk.vkCmdCopyBuffer(commandbuffer, srcbuffer, dstbuffer, 1, &copyregion);
-        try self.endsingletimecommands(commandbuffer, 0);
-    }
     fn createvertexbuffer(self: *graphicalcontext) !void {
-        const buffersize = @sizeOf(drawing.data) * self.vertices.len;
+        const buffersize = @sizeOf(drawing.data) * self.model.vertices.len;
         var stagingbuffer: vk.VkBuffer = undefined;
         var stagingbuffermemory: vk.VkDeviceMemory = undefined;
-        try createbuffer(
-            self,
+        try vkbuffer.createbuffer(
+            self.logicaldevice,
+            self.physicaldevice,
             buffersize,
             vk.VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
             vk.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | vk.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
             &stagingbuffer,
             &stagingbuffermemory,
         );
-
-        var memdata: ?*anyopaque = undefined;
-        _ = vk.vkMapMemory(self.logicaldevice.device, stagingbuffermemory, 0, buffersize, 0, &memdata);
-        const ptr: [*]drawing.data = @ptrCast(@alignCast(memdata));
-        std.mem.copyForwards(drawing.data, ptr[0..self.vertices.len], self.vertices);
-        _ = vk.vkUnmapMemory(self.logicaldevice.device, stagingbuffermemory);
-
-        try createbuffer(
-            self,
+        vkbuffer.copydatatobuffer(
+            self.logicaldevice,
+            stagingbuffermemory,
+            buffersize,
+            drawing.data,
+            self.model.vertices,
+        );
+        try vkbuffer.createbuffer(
+            self.logicaldevice,
+            self.physicaldevice,
             buffersize,
             vk.VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | vk.VK_BUFFER_USAGE_TRANSFER_DST_BIT,
             vk.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
             &self.vertexbuffer,
             &self.vertexbuffermemory,
         );
-        try copybuffer(self, stagingbuffer, self.vertexbuffer, buffersize);
+        try vkbuffer.copybuffertobuffer(self.commandpoolonetimecommand, stagingbuffer, self.vertexbuffer, buffersize);
         vk.vkDestroyBuffer(self.logicaldevice.device, stagingbuffer, null);
         vk.vkFreeMemory(self.logicaldevice.device, stagingbuffermemory, null);
     }
     fn destroyvertexbuffer(self: *graphicalcontext) void {
         vk.vkDestroyBuffer(self.logicaldevice.device, self.vertexbuffer, null);
         vk.vkFreeMemory(self.logicaldevice.device, self.vertexbuffermemory, null);
-    }
-    fn createbuffer(
-        self: *graphicalcontext,
-        buffersize: vk.VkDeviceSize,
-        bufferusageflags: vk.VkBufferUsageFlags,
-        memorypropertiesflags: vk.VkMemoryPropertyFlags,
-        buffer: *vk.VkBuffer,
-        buffermemory: *vk.VkDeviceMemory,
-    ) !void {
-        var buffercreateinfo: vk.VkBufferCreateInfo = .{};
-        buffercreateinfo.sType = vk.VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-        buffercreateinfo.size = buffersize;
-        buffercreateinfo.usage = bufferusageflags;
-        buffercreateinfo.sharingMode = vk.VK_SHARING_MODE_EXCLUSIVE;
-        buffercreateinfo.flags = 0;
-        if (vk.vkCreateBuffer(self.logicaldevice.device, &buffercreateinfo, null, buffer) != vk.VK_SUCCESS) {
-            std.log.err("Unable to create vertex buffer", .{});
-            return error.FailedToCreateVertexBuffer;
-        }
-
-        var memoryrequirements: vk.VkMemoryRequirements = .{};
-        vk.vkGetBufferMemoryRequirements(self.logicaldevice.device, buffer.*, &memoryrequirements);
-
-        var allocationinfo: vk.VkMemoryAllocateInfo = .{};
-        allocationinfo.sType = vk.VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-        allocationinfo.allocationSize = memoryrequirements.size;
-        allocationinfo.memoryTypeIndex = try findmemorytype(
-            self,
-            memoryrequirements.memoryTypeBits,
-            memorypropertiesflags,
-        );
-        if (vk.vkAllocateMemory(self.logicaldevice.device, &allocationinfo, null, buffermemory) != vk.VK_SUCCESS) {
-            std.log.err("Unable to Allocate Gpu Memory", .{});
-            return error.FailedToAllocateGpuMemory;
-        }
-        _ = vk.vkBindBufferMemory(self.logicaldevice.device, buffer.*, buffermemory.*, 0);
-    }
-    fn findmemorytype(self: *graphicalcontext, typefilter: u32, properties: vk.VkMemoryPropertyFlags) !u32 {
-        var memoryproperties: vk.VkPhysicalDeviceMemoryProperties = undefined;
-        vk.vkGetPhysicalDeviceMemoryProperties(self.physicaldevice.physicaldevice, &memoryproperties);
-        for (0..memoryproperties.memoryTypeCount) |i| {
-            if ((typefilter & (@as(u32, 1) << @as(u5, @intCast(i)))) != 0 and (memoryproperties.memoryTypes[i].propertyFlags & properties) != 0) {
-                return @intCast(i);
-            }
-            if (i == std.math.maxInt(u5)) break;
-        }
-        std.log.err("Unable to find suitable memory type", .{});
-        return error.FailedToFindSuitableMemory;
     }
 
     fn destroysyncobjects(self: *graphicalcontext) void {
@@ -1094,7 +654,6 @@ pub const graphicalcontext = struct {
             vk.vkDestroySemaphore(self.logicaldevice.device, self.renderfinishedsephamores[i], null);
             vk.vkDestroyFence(self.logicaldevice.device, self.inflightfences[i], null);
         }
-        vk.vkDestroyFence(self.logicaldevice.device, self.temperorycommandbufferinuse, null);
         self.allocator.free(self.imageavailablesephamores);
         self.allocator.free(self.renderfinishedsephamores);
         self.allocator.free(self.inflightfences);
@@ -1122,10 +681,6 @@ pub const graphicalcontext = struct {
                 std.log.err("Unable to Create Cpu fence (render)", .{});
                 return error.UnableToCreateFence;
             }
-        }
-        if (vk.vkCreateFence(self.logicaldevice.device, &fencecreateinfo, null, &self.temperorycommandbufferinuse) != vk.VK_SUCCESS) {
-            std.log.err("Unable to Create Cpu fence (datatransfer)", .{});
-            return error.UnableToCreateFence;
         }
     }
 
@@ -1179,9 +734,7 @@ pub const graphicalcontext = struct {
         }
     }
 };
-const png = @cImport({
-    @cInclude("png.h");
-});
+
 const c = @cImport({
     @cInclude("setjmp.h");
 });
@@ -1196,6 +749,8 @@ const vkimage = @import("vulkan/image.zig");
 const vkrenderpass = @import("vulkan/renderpass.zig");
 const vkpipeline = @import("vulkan/pipeline.zig");
 const vkcommandbuffer = @import("vulkan/commandbuffer.zig");
+const vkbuffer = @import("vulkan/buffer.zig");
+const resourceloading = @import("resourceloading.zig");
 const helper = @import("helpers.zig");
 const main = @import("main.zig");
 const std = @import("std");

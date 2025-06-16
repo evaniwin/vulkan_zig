@@ -6,8 +6,7 @@ pub const obj = struct {
     texcoordsnum: u32,
     faces: []face,
     facesnum: u32,
-    vdata: []drawing.data,
-    idata: []u32,
+    model: model,
     pub fn init(allocator: std.mem.Allocator, filename: []const u8) !*obj {
         const self = try allocator.create(obj);
         self.allocator = allocator;
@@ -63,10 +62,11 @@ pub const obj = struct {
         try self.formatdata(data, dataind, ind, indx);
     }
     fn formatdata(self: *obj, data: [][2]u32, datalen: u32, ind: []u32, indlen: u32) !void {
-        self.vdata = try self.allocator.alloc(drawing.data, datalen);
-        self.idata = try self.allocator.alloc(u32, indlen);
+        self.model.allocator = self.allocator;
+        self.model.vertices = try self.allocator.alloc(drawing.data, datalen);
+        self.model.indices = try self.allocator.alloc(u32, indlen);
         for (0..datalen) |i| {
-            self.vdata[i] = .{
+            self.model.vertices[i] = .{
                 .vertex = .{
                     self.vertices[data[i][0]].coord[0],
                     self.vertices[data[i][0]].coord[1],
@@ -80,7 +80,7 @@ pub const obj = struct {
             };
         }
         for (0..indlen) |i| {
-            self.idata[i] = ind[i];
+            self.model.indices[i] = ind[i];
         }
     }
     fn populatedata(self: *obj, file: std.fs.File) !void {
@@ -183,7 +183,15 @@ pub const obj = struct {
         }
     }
 };
-
+pub const model = struct {
+    allocator: std.mem.Allocator,
+    vertices: []drawing.data,
+    indices: []u32,
+    pub fn freemodeldata(self: *model) void {
+        self.allocator.free(self.vertices);
+        self.allocator.free(self.indices);
+    }
+};
 const vertex = struct { coord: [3]f32 };
 const texcoord = struct { coord: [2]f32 };
 const face = struct {

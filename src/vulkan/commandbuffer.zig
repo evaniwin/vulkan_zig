@@ -13,6 +13,7 @@ pub const commandpool = struct {
     flags: vk.VkCommandPoolCreateFlags,
     commandbuffers: [][]vk.VkCommandBuffer,
     commandbuffersallocated: []bool,
+    fence: vk.VkFence,
 
     pub fn init(commandpoolcreateparams: commandpoolcreateinfo) !*commandpool {
         const self: *commandpool = try commandpoolcreateparams.allocator.create(commandpool);
@@ -34,6 +35,13 @@ pub const commandpool = struct {
         if (vk.vkCreateCommandPool(self.logicaldevice.device, &Commandpoolcreateinfo, null, &self.commandpool) != vk.VK_SUCCESS) {
             std.log.err("Unable to create Command Pool", .{});
             return error.CommandPoolCreationFailed;
+        }
+        var fencecreateinfo: vk.VkFenceCreateInfo = .{};
+        fencecreateinfo.sType = vk.VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+        fencecreateinfo.flags = vk.VK_FENCE_CREATE_SIGNALED_BIT;
+        if (vk.vkCreateFence(self.logicaldevice.device, &fencecreateinfo, null, &self.fence) != vk.VK_SUCCESS) {
+            std.log.err("Unable to Create fence (commandpool)", .{});
+            return error.UnableToCreateFence;
         }
 
         return self;
@@ -81,12 +89,57 @@ pub const commandpool = struct {
                 self.freecommandbuffer(@intCast(i));
             }
         }
+        vk.vkDestroyFence(self.logicaldevice.device, self.fence, null);
         vk.vkDestroyCommandPool(self.logicaldevice.device, self.commandpool, null);
         self.allocator.free(self.commandbuffers);
         self.allocator.free(self.commandbuffersallocated);
         self.allocator.destroy(self);
     }
 };
+pub fn beginsingletimecommands(Commandpool: *commandpool, index: u32) !vk.VkCommandBuffer {
+    _ = vk.vkWaitForFences(
+        Commandpool.logicaldevice.device,
+        1,
+        &Commandpool.fence,
+        vk.VK_TRUE,
+        std.math.maxInt(u64),
+    );
+    _ = vk.vkResetFences(Commandpool.logicaldevice.device, 1, &Commandpool.fence);
+
+    try Commandpool.createcommandbuffer(index, 1, vk.VK_COMMAND_BUFFER_LEVEL_PRIMARY);
+    var begininfo: vk.VkCommandBufferBeginInfo = .{};
+    begininfo.sType = vk.VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    begininfo.flags = vk.VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+
+    if (vk.vkBeginCommandBuffer(Commandpool.commandbuffers[index][0], &begininfo) != vk.VK_SUCCESS) {
+        std.log.err("Unable to Begin Recording Commandbufffer datatransfer", .{});
+        return error.FailedToBeginRecordingCommandBuffer;
+    }
+    return Commandpool.commandbuffers[index][0];
+}
+pub fn endsingletimecommands(Commandpool: *commandpool, commandbuffer: vk.VkCommandBuffer, index: u32) !void {
+    if (vk.vkEndCommandBuffer(commandbuffer) != vk.VK_SUCCESS) {
+        std.log.err("Unable to End Recording Commandbufffer datatransfer", .{});
+        return error.FailedToEndRecordingCommandBuffer;
+    }
+    var submitinfo: vk.VkSubmitInfo = .{};
+    submitinfo.sType = vk.VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submitinfo.commandBufferCount = 1;
+    submitinfo.pCommandBuffers = &commandbuffer;
+
+    if (vk.vkQueueSubmit(Commandpool.logicaldevice.graphicsqueue.queue, 1, &submitinfo, Commandpool.fence) != vk.VK_SUCCESS) {
+        std.log.err("Unable to Submit Queue", .{});
+        return error.QueueSubmissionFailed;
+    }
+    _ = vk.vkWaitForFences(
+        Commandpool.logicaldevice.device,
+        1,
+        &Commandpool.fence,
+        vk.VK_TRUE,
+        std.math.maxInt(u64),
+    );
+    Commandpool.freecommandbuffer(index);
+}
 pub const vk = graphics.vk;
 const graphics = @import("../graphics.zig");
 const vklogicaldevice = @import("logicaldevice.zig");
