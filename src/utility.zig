@@ -149,7 +149,7 @@ pub const graphicalcontext = struct {
         destroysyncobjects(self);
         destroytextureimagesampler(self);
         destroytextureimageview(self);
-        destroyimage(self, self.textureimage, self.textureimagememory);
+        vkimage.destroyimage(self.logicaldevice, self.textureimage, self.textureimagememory);
         destroycommandpools(self);
         destroyswapchainframebuffers(self);
         destroydepthresources(self);
@@ -276,8 +276,9 @@ pub const graphicalcontext = struct {
         if (swapchainimageslen != self.swapchain.images.len) @panic("swap chain image length mismatch After Recreation");
     }
     fn createcolorresources(self: *graphicalcontext) !void {
-        try self.createimage(
-            self.logicaldevice.device,
+        try vkimage.createimage(
+            self.physicaldevice,
+            self.logicaldevice,
             self.swapchain.extent.width,
             self.swapchain.extent.height,
             1,
@@ -321,9 +322,9 @@ pub const graphicalcontext = struct {
     }
     fn createdepthresources(self: *graphicalcontext) !void {
         const depthformat: vk.VkFormat = try self.finddepthformat();
-        try createimage(
-            self,
-            self.logicaldevice.device,
+        try vkimage.createimage(
+            self.physicaldevice,
+            self.logicaldevice,
             self.swapchain.extent.width,
             self.swapchain.extent.height,
             1,
@@ -343,8 +344,8 @@ pub const graphicalcontext = struct {
             vk.VK_IMAGE_ASPECT_DEPTH_BIT,
             1,
         );
-        try transitionimagelayout(
-            self,
+        try vkimage.transitionimagelayout(
+            self.commandpoolonetimecommand,
             self.depthimage,
             depthformat,
             vk.VK_IMAGE_LAYOUT_UNDEFINED,
@@ -355,28 +356,12 @@ pub const graphicalcontext = struct {
 
     fn finddepthformat(self: *graphicalcontext) !vk.VkFormat {
         var formats: [3]vk.VkFormat = .{ vk.VK_FORMAT_D32_SFLOAT, vk.VK_FORMAT_D32_SFLOAT_S8_UINT, vk.VK_FORMAT_D24_UNORM_S8_UINT };
-        return findsupportedformats(
-            self,
+        return vkimage.findsupportedformats(
+            self.physicaldevice,
             &formats,
             vk.VK_IMAGE_TILING_OPTIMAL,
             vk.VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT,
         );
-    }
-    fn findsupportedformats(self: *graphicalcontext, formatcanadates: []vk.VkFormat, tiling: vk.VkImageTiling, features: vk.VkFormatFeatureFlags) !vk.VkFormat {
-        for (formatcanadates) |format| {
-            var properties: vk.VkFormatProperties = undefined;
-            vk.vkGetPhysicalDeviceFormatProperties(self.physicaldevice.physicaldevice, format, &properties);
-            if (tiling == vk.VK_IMAGE_TILING_LINEAR and ((properties.linearTilingFeatures & features) == features)) {
-                return format;
-            } else if (tiling == vk.VK_IMAGE_TILING_OPTIMAL and ((properties.optimalTilingFeatures & features) == features)) {
-                return format;
-            }
-        }
-        std.log.err("Unable to Find supported format", .{});
-        return error.FailedToFindSupportedImageFormat;
-    }
-    fn checkstencilcomponent(format: vk.VkFormat) bool {
-        return (format == vk.VK_FORMAT_D32_SFLOAT_S8_UINT or format == vk.VK_FORMAT_D24_UNORM_S8_UINT);
     }
     fn createtextureimagesampler(self: *graphicalcontext) !void {
         var samplercreateinfo: vk.VkSamplerCreateInfo = .{};
@@ -517,9 +502,9 @@ pub const graphicalcontext = struct {
             u8,
             pixels,
         );
-        try createimage(
-            self,
-            self.logicaldevice.device,
+        try vkimage.createimage(
+            self.physicaldevice,
+            self.logicaldevice,
             width,
             height,
             self.miplevels,
@@ -531,14 +516,16 @@ pub const graphicalcontext = struct {
             &self.textureimage,
             &self.textureimagememory,
         );
-        try self.transitionimagelayout(
+        try vkimage.transitionimagelayout(
+            self.commandpoolonetimecommand,
             self.textureimage,
             vk.VK_FORMAT_R8G8B8A8_SRGB,
             vk.VK_IMAGE_LAYOUT_UNDEFINED,
             vk.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
             self.miplevels,
         );
-        try self.copybuffertoimage(
+        try vkimage.copybuffertoimage(
+            self.commandpoolonetimecommand,
             stagingbuffer,
             self.textureimage,
             width,
@@ -547,268 +534,15 @@ pub const graphicalcontext = struct {
 
         vk.vkDestroyBuffer(self.logicaldevice.device, stagingbuffer, null);
         vk.vkFreeMemory(self.logicaldevice.device, stagingbuffermemory, null);
-        try self.generatemipmaps(
+        try vkimage.generatemipmaps(
+            self.physicaldevice,
+            self.commandpoolonetimecommand,
             self.textureimage,
             vk.VK_FORMAT_R8G8B8A8_SRGB,
             width,
             height,
             self.miplevels,
         );
-    }
-    fn destroyimage(self: *graphicalcontext, image: vk.VkImage, imagememory: vk.VkDeviceMemory) void {
-        vk.vkDestroyImage(self.logicaldevice.device, image, null);
-        vk.vkFreeMemory(self.logicaldevice.device, imagememory, null);
-    }
-    fn generatemipmaps(self: *graphicalcontext, image: vk.VkImage, imageformat: vk.VkFormat, imgwidth: u32, imgheight: u32, miplevels: u32) !void {
-        var formatproperties: vk.VkFormatProperties = .{};
-        vk.vkGetPhysicalDeviceFormatProperties(self.physicaldevice.physicaldevice, imageformat, &formatproperties);
-        if ((formatproperties.optimalTilingFeatures & vk.VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT) == 0) {
-            std.log.err("Minmap generation failed: Device does not suppert linear blitting", .{});
-            return error.MinmapGenerationFailed;
-        }
-        const commandbuffer: vk.VkCommandBuffer = try vkcommandbuffer.beginsingletimecommands(self.commandpoolonetimecommand, 0);
-        var mipwidth: i32 = @intCast(imgwidth);
-        var mipheight: i32 = @intCast(imgheight);
-        var barrier: vk.VkImageMemoryBarrier = .{};
-        barrier.sType = vk.VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-        barrier.image = image;
-        barrier.srcQueueFamilyIndex = vk.VK_QUEUE_FAMILY_IGNORED;
-        barrier.dstQueueFamilyIndex = vk.VK_QUEUE_FAMILY_IGNORED;
-        barrier.subresourceRange.aspectMask = vk.VK_IMAGE_ASPECT_COLOR_BIT;
-        barrier.subresourceRange.baseArrayLayer = 0;
-        barrier.subresourceRange.levelCount = 1;
-        barrier.subresourceRange.layerCount = 1;
-        for (1..miplevels) |i| {
-            barrier.subresourceRange.baseMipLevel = @intCast(i - 1);
-            barrier.oldLayout = vk.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-            barrier.newLayout = vk.VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-            barrier.srcAccessMask = vk.VK_ACCESS_TRANSFER_WRITE_BIT;
-            barrier.dstAccessMask = vk.VK_ACCESS_TRANSFER_READ_BIT;
-
-            vk.vkCmdPipelineBarrier(
-                commandbuffer,
-                vk.VK_PIPELINE_STAGE_TRANSFER_BIT,
-                vk.VK_PIPELINE_STAGE_TRANSFER_BIT,
-                0,
-                0,
-                null,
-                0,
-                null,
-                1,
-                &barrier,
-            );
-
-            var blit: vk.VkImageBlit = .{};
-            blit.srcOffsets[0] = .{ .x = 0, .y = 0, .z = 0 };
-            blit.srcOffsets[1] = .{ .x = mipwidth, .y = mipheight, .z = 1 };
-            blit.srcSubresource.aspectMask = vk.VK_IMAGE_ASPECT_COLOR_BIT;
-            blit.srcSubresource.mipLevel = @intCast(i - 1);
-            blit.srcSubresource.baseArrayLayer = 0;
-            blit.srcSubresource.layerCount = 1;
-            blit.dstOffsets[0] = .{ .x = 0, .y = 0, .z = 0 };
-
-            if (mipwidth > 1) {
-                mipwidth = @divTrunc(mipwidth, 2);
-            } else {
-                mipwidth = 1;
-            }
-            if (mipheight > 1) {
-                mipheight = @divTrunc(mipheight, 2);
-            } else {
-                mipheight = 1;
-            }
-
-            blit.dstOffsets[1] = .{ .x = mipwidth, .y = mipheight, .z = 1 };
-            blit.dstSubresource.aspectMask = vk.VK_IMAGE_ASPECT_COLOR_BIT;
-            blit.dstSubresource.mipLevel = @intCast(i);
-            blit.dstSubresource.baseArrayLayer = 0;
-            blit.dstSubresource.layerCount = 1;
-
-            vk.vkCmdBlitImage(
-                commandbuffer,
-                image,
-                vk.VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                image,
-                vk.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                1,
-                &blit,
-                vk.VK_FILTER_LINEAR,
-            );
-
-            barrier.oldLayout = vk.VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-            barrier.newLayout = vk.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-            barrier.srcAccessMask = vk.VK_ACCESS_TRANSFER_READ_BIT;
-            barrier.dstAccessMask = vk.VK_ACCESS_SHADER_READ_BIT;
-            vk.vkCmdPipelineBarrier(
-                commandbuffer,
-                vk.VK_PIPELINE_STAGE_TRANSFER_BIT,
-                vk.VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-                0,
-                0,
-                null,
-                0,
-                null,
-                1,
-                &barrier,
-            );
-        }
-        barrier.subresourceRange.baseMipLevel = miplevels - 1;
-        barrier.oldLayout = vk.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-        barrier.newLayout = vk.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        barrier.srcAccessMask = vk.VK_ACCESS_TRANSFER_READ_BIT;
-        barrier.dstAccessMask = vk.VK_ACCESS_SHADER_READ_BIT;
-        vk.vkCmdPipelineBarrier(
-            commandbuffer,
-            vk.VK_PIPELINE_STAGE_TRANSFER_BIT,
-            vk.VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-            0,
-            0,
-            null,
-            0,
-            null,
-            1,
-            &barrier,
-        );
-        try vkcommandbuffer.endsingletimecommands(self.commandpoolonetimecommand, commandbuffer, 0);
-    }
-    fn createimage(
-        self: *graphicalcontext,
-        device: vk.VkDevice,
-        width: u32,
-        height: u32,
-        miplevels: u32,
-        numsamples: vk.VkSampleCountFlagBits,
-        format: vk.VkFormat,
-        tiling: vk.VkImageTiling,
-        imageusage: vk.VkImageUsageFlags,
-        memproperties: vk.VkMemoryPropertyFlags,
-        image: *vk.VkImage,
-        imagememory: *vk.VkDeviceMemory,
-    ) !void {
-        var imagecreateinfo: vk.VkImageCreateInfo = .{};
-        imagecreateinfo.sType = vk.VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-        imagecreateinfo.imageType = vk.VK_IMAGE_TYPE_2D;
-        imagecreateinfo.extent.width = width;
-        imagecreateinfo.extent.height = height;
-        imagecreateinfo.extent.depth = 1;
-        imagecreateinfo.mipLevels = miplevels;
-        imagecreateinfo.arrayLayers = 1;
-        imagecreateinfo.format = format;
-        imagecreateinfo.tiling = tiling;
-        imagecreateinfo.initialLayout = vk.VK_IMAGE_LAYOUT_UNDEFINED;
-        imagecreateinfo.usage = imageusage;
-        imagecreateinfo.sharingMode = vk.VK_SHARING_MODE_EXCLUSIVE;
-        imagecreateinfo.samples = numsamples;
-        imagecreateinfo.flags = 0;
-        if (vk.vkCreateImage(device, &imagecreateinfo, null, image) != vk.VK_SUCCESS) {
-            std.log.err("Unable to create Texture Image", .{});
-            return error.FailedToCreateTextureImage;
-        }
-
-        var memoryrequirements: vk.VkMemoryRequirements = .{};
-        vk.vkGetImageMemoryRequirements(device, image.*, &memoryrequirements);
-
-        var allocationinfo: vk.VkMemoryAllocateInfo = .{};
-        allocationinfo.sType = vk.VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-        allocationinfo.allocationSize = memoryrequirements.size;
-        allocationinfo.memoryTypeIndex = try vkbuffer.findmemorytype(self.physicaldevice, memoryrequirements.memoryTypeBits, memproperties);
-        if (vk.vkAllocateMemory(device, &allocationinfo, null, imagememory) != vk.VK_SUCCESS) {
-            std.log.err("Unable to create Texture Image Memory", .{});
-            return error.FailedToCreateTextureImageMemory;
-        }
-        _ = vk.vkBindImageMemory(device, image.*, imagememory.*, 0);
-    }
-    fn copybuffertoimage(self: *graphicalcontext, buffer: vk.VkBuffer, image: vk.VkImage, width: u32, height: u32) !void {
-        const commandbuffer: vk.VkCommandBuffer = try vkcommandbuffer.beginsingletimecommands(self.commandpoolonetimecommand, 0);
-
-        var region: vk.VkBufferImageCopy = .{};
-        region.bufferOffset = 0;
-        region.bufferRowLength = 0;
-        region.bufferImageHeight = 0;
-
-        region.imageSubresource.aspectMask = vk.VK_IMAGE_ASPECT_COLOR_BIT;
-        region.imageSubresource.mipLevel = 0;
-        region.imageSubresource.baseArrayLayer = 0;
-        region.imageSubresource.layerCount = 1;
-
-        region.imageOffset = .{ .x = 0, .y = 0, .z = 0 };
-        region.imageExtent = .{
-            .width = width,
-            .height = height,
-            .depth = 1,
-        };
-        vk.vkCmdCopyBufferToImage(
-            commandbuffer,
-            buffer,
-            image,
-            vk.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-            1,
-            &region,
-        );
-        try vkcommandbuffer.endsingletimecommands(self.commandpoolonetimecommand, commandbuffer, 0);
-    }
-    fn transitionimagelayout(self: *graphicalcontext, image: vk.VkImage, format: vk.VkFormat, oldlayout: vk.VkImageLayout, newlayout: vk.VkImageLayout, miplevels: u32) !void {
-        const commandbuffer: vk.VkCommandBuffer = try vkcommandbuffer.beginsingletimecommands(self.commandpoolonetimecommand, 0);
-        var barrier: vk.VkImageMemoryBarrier = .{};
-        barrier.sType = vk.VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-        barrier.oldLayout = oldlayout;
-        barrier.newLayout = newlayout;
-        barrier.srcQueueFamilyIndex = vk.VK_QUEUE_FAMILY_IGNORED;
-        barrier.dstQueueFamilyIndex = vk.VK_QUEUE_FAMILY_IGNORED;
-        barrier.image = image;
-        barrier.subresourceRange.baseMipLevel = 0;
-        barrier.subresourceRange.levelCount = miplevels;
-        barrier.subresourceRange.baseArrayLayer = 0;
-        barrier.subresourceRange.layerCount = 1;
-        if (newlayout == vk.VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL) {
-            barrier.subresourceRange.aspectMask = vk.VK_IMAGE_ASPECT_DEPTH_BIT;
-
-            if (checkstencilcomponent(format)) {
-                barrier.subresourceRange.aspectMask = vk.VK_IMAGE_ASPECT_STENCIL_BIT | vk.VK_IMAGE_ASPECT_DEPTH_BIT;
-            } else {
-                barrier.subresourceRange.aspectMask = vk.VK_IMAGE_ASPECT_DEPTH_BIT;
-            }
-        } else {
-            barrier.subresourceRange.aspectMask = vk.VK_IMAGE_ASPECT_COLOR_BIT;
-        }
-        var sourcestage: vk.VkPipelineStageFlags = undefined;
-        var destinationstage: vk.VkPipelineStageFlags = undefined;
-        if (oldlayout == vk.VK_IMAGE_LAYOUT_UNDEFINED and newlayout == vk.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL) {
-            barrier.srcAccessMask = 0;
-            barrier.dstAccessMask = vk.VK_ACCESS_TRANSFER_WRITE_BIT;
-
-            sourcestage = vk.VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
-            destinationstage = vk.VK_PIPELINE_STAGE_TRANSFER_BIT;
-        } else if (oldlayout == vk.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL and newlayout == vk.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
-            barrier.srcAccessMask = vk.VK_ACCESS_TRANSFER_WRITE_BIT;
-            barrier.dstAccessMask = vk.VK_ACCESS_SHADER_READ_BIT;
-
-            sourcestage = vk.VK_PIPELINE_STAGE_TRANSFER_BIT;
-            destinationstage = vk.VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
-        } else if (oldlayout == vk.VK_IMAGE_LAYOUT_UNDEFINED and newlayout == vk.VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL) {
-            barrier.srcAccessMask = 0;
-            barrier.dstAccessMask = vk.VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | vk.VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-
-            sourcestage = vk.VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
-            destinationstage = vk.VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
-        } else {
-            std.log.err("Unsupported Layout Transition", .{});
-            return error.UnsupportedLayoutTransition;
-        }
-        vk.vkCmdPipelineBarrier(
-            commandbuffer,
-            sourcestage,
-            destinationstage,
-            0,
-            0,
-            null,
-            0,
-            null,
-            1,
-            &barrier,
-        );
-
-        try vkcommandbuffer.endsingletimecommands(self.commandpoolonetimecommand, commandbuffer, 0);
     }
     fn createdescriptorpool(self: *graphicalcontext) !void {
         var descriptorpoolsizes: [2]vk.VkDescriptorPoolSize = undefined;
