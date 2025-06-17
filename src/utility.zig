@@ -50,6 +50,8 @@ pub const graphicalcontext = struct {
     imageavailablesephamores: []vk.VkSemaphore,
     renderfinishedsephamores: []vk.VkSemaphore,
     inflightfences: []vk.VkFence,
+    computefinishedsephamores: []vk.VkSemaphore,
+    computeinflightfences: []vk.VkFence,
     model: parseobj.model,
     pub fn init(allocator: std.mem.Allocator, window: *vk.GLFWwindow) !*graphicalcontext {
         //allocate an instance of this struct
@@ -652,10 +654,14 @@ pub const graphicalcontext = struct {
             vk.vkDestroySemaphore(self.logicaldevice.device, self.imageavailablesephamores[i], null);
             vk.vkDestroySemaphore(self.logicaldevice.device, self.renderfinishedsephamores[i], null);
             vk.vkDestroyFence(self.logicaldevice.device, self.inflightfences[i], null);
+            vk.vkDestroySemaphore(self.logicaldevice.device, self.computefinishedsephamores[i], null);
+            vk.vkDestroyFence(self.logicaldevice.device, self.computeinflightfences[i], null);
         }
         self.allocator.free(self.imageavailablesephamores);
         self.allocator.free(self.renderfinishedsephamores);
         self.allocator.free(self.inflightfences);
+        self.allocator.free(self.computefinishedsephamores);
+        self.allocator.free(self.computeinflightfences);
     }
     fn createsyncobjects(self: *graphicalcontext) !void {
         var sephamorecreateinfo: vk.VkSemaphoreCreateInfo = .{};
@@ -667,6 +673,8 @@ pub const graphicalcontext = struct {
         self.imageavailablesephamores = try self.allocator.alloc(vk.VkSemaphore, self.swapchain.images.len);
         self.renderfinishedsephamores = try self.allocator.alloc(vk.VkSemaphore, self.swapchain.images.len);
         self.inflightfences = try self.allocator.alloc(vk.VkFence, self.swapchain.images.len);
+        self.computefinishedsephamores = try self.allocator.alloc(vk.VkSemaphore, self.swapchain.images.len);
+        self.computeinflightfences = try self.allocator.alloc(vk.VkFence, self.swapchain.images.len);
         for (0..self.swapchain.images.len) |i| {
             if (vk.vkCreateSemaphore(self.logicaldevice.device, &sephamorecreateinfo, null, &self.imageavailablesephamores[i]) != vk.VK_SUCCESS) {
                 std.log.err("Unable to Create Gpu Semaphore", .{});
@@ -677,6 +685,14 @@ pub const graphicalcontext = struct {
                 return error.UnableToCreateSemaphore;
             }
             if (vk.vkCreateFence(self.logicaldevice.device, &fencecreateinfo, null, &self.inflightfences[i]) != vk.VK_SUCCESS) {
+                std.log.err("Unable to Create Cpu fence (render)", .{});
+                return error.UnableToCreateFence;
+            }
+            if (vk.vkCreateSemaphore(self.logicaldevice.device, &sephamorecreateinfo, null, &self.computefinishedsephamores[i]) != vk.VK_SUCCESS) {
+                std.log.err("Unable to Create Gpu Semaphore", .{});
+                return error.UnableToCreateSemaphore;
+            }
+            if (vk.vkCreateFence(self.logicaldevice.device, &fencecreateinfo, null, &self.computeinflightfences[i]) != vk.VK_SUCCESS) {
                 std.log.err("Unable to Create Cpu fence (render)", .{});
                 return error.UnableToCreateFence;
             }
@@ -711,6 +727,20 @@ pub const graphicalcontext = struct {
             vkimage.destroyframebuffer(self.logicaldevice, self.swapchainframebuffers[i]);
         }
         self.allocator.free(self.swapchainframebuffers);
+    }
+    fn createswapchainframebuffers_compute(self: *graphicalcontext) !void {
+        self.swapchainframebuffers = try self.allocator.alloc(vk.VkFramebuffer, self.swapchainimageviews.imageviews.len);
+
+        for (0..self.swapchainimageviews.imageviews.len) |i| {
+            var attachments: [1]vk.VkImageView = .{self.swapchainimageviews.imageviews[i]};
+            try vkimage.createframebuffer(
+                self.logicaldevice,
+                &self.swapchainframebuffers[i],
+                self.renderpass,
+                &attachments,
+                self.swapchain.extent,
+            );
+        }
     }
     fn createswapchainframebuffers(self: *graphicalcontext) !void {
         self.swapchainframebuffers = try self.allocator.alloc(vk.VkFramebuffer, self.swapchainimageviews.imageviews.len);
