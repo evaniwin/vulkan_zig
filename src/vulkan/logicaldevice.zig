@@ -18,6 +18,7 @@ pub const LogicalDevice = struct {
     queuelist: *graphicsqueue,
     graphicsqueue: queuestr,
     presentqueue: queuestr,
+    computequeue: queuestr,
     pub fn createlogicaldevice(logicaldeviceparams: logicaldeviccecreateinfo) !*LogicalDevice {
         const self: *LogicalDevice = try logicaldeviceparams.allocator.create(LogicalDevice);
         self.allocator = logicaldeviceparams.allocator;
@@ -25,9 +26,9 @@ pub const LogicalDevice = struct {
         self.queuelist = logicaldeviceparams.queuelist;
 
         var quefamilyindex: [2]u32 = undefined;
-        self.queuelist.queueflagsmatch(vk.VK_QUEUE_GRAPHICS_BIT);
+        self.queuelist.queueflagsmatch(vk.VK_QUEUE_GRAPHICS_BIT | vk.VK_QUEUE_COMPUTE_BIT);
         self.queuelist.filternotinuse();
-        if (self.queuelist.queuesfound == 0) @panic("no graphics queue found");
+        if (self.queuelist.queuesfound == 0) @panic("no graphics & compute queue found");
         self.queuelist.markQueueInuse(self.queuelist.searchresult[0]);
         quefamilyindex[0] = self.queuelist.searchresult[0];
         self.queuelist.checkpresentCapable(logicaldeviceparams.surface, self.physicaldevice.physicaldevice);
@@ -69,6 +70,8 @@ pub const LogicalDevice = struct {
         }
         vk.vkGetDeviceQueue(self.device, quefamilyindex[0], 0, &self.graphicsqueue.queue);
         self.graphicsqueue.familyindex = quefamilyindex[0];
+        vk.vkGetDeviceQueue(self.device, quefamilyindex[0], 0, &self.computequeue.queue);
+        self.computequeue.familyindex = quefamilyindex[0];
         vk.vkGetDeviceQueue(self.device, quefamilyindex[1], 0, &self.presentqueue.queue);
         self.presentqueue.familyindex = quefamilyindex[1];
 

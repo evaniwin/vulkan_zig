@@ -44,6 +44,8 @@ pub const graphicalcontext = struct {
     colorimage: vk.VkImage,
     colorimagememory: vk.VkDeviceMemory,
     colorimageview: vk.VkImageView,
+    shaderstoragebuffers: []vk.VkBuffer,
+    shaderstoragebuffersmemory: []vk.VkDeviceMemory,
 
     imageavailablesephamores: []vk.VkSemaphore,
     renderfinishedsephamores: []vk.VkSemaphore,
@@ -281,6 +283,73 @@ pub const graphicalcontext = struct {
         );
         try createswapchainframebuffers(self);
         if (swapchainimageslen != self.swapchain.images.len) @panic("swap chain image length mismatch After Recreation");
+    }
+    fn createshaderstoragebuffer(self: *graphicalcontext) !void {
+        self.shaderstoragebuffers = try self.allocator.alloc(vk.VkBuffer, self.swapchain.images.len);
+        self.shaderstoragebuffersmemory = try self.allocator.alloc(vk.VkDeviceMemory, self.swapchain.images.len);
+
+        const count = 256;
+        const points = try self.allocator.alloc(drawing.points, count);
+        defer self.allocator.free(points);
+        var pgrm = std.Random.Xoroshiro128.init(0);
+        const random = pgrm.random();
+        for (0..count) |index| {
+            const theta = -2.0 * std.math.pi * (@as(f32, @floatFromInt(index)) / @as(f32, @floatFromInt(count)));
+            const cx = @as(f32, std.math.sin(theta));
+            const cy = @as(f32, std.math.cos(theta));
+            points[index] = .{
+                .position = .{ cx, cy },
+                .velocity = .{mathmatrix.vec2normalize(.{ cx, cy })},
+                .color = .{ random.float(f32), random.float(f32), random.float(f32), 1 },
+            };
+        }
+
+        const buffersize = @sizeOf(drawing.points) * points.len;
+        var stagingbuffer: vk.VkBuffer = undefined;
+        var stagingbuffermemory: vk.VkDeviceMemory = undefined;
+        try vkbuffer.createbuffer(
+            self.logicaldevice,
+            self.physicaldevice,
+            buffersize,
+            vk.VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+            vk.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | vk.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+            &stagingbuffer,
+            &stagingbuffermemory,
+        );
+        vkbuffer.copydatatobuffer(
+            self.logicaldevice,
+            stagingbuffermemory,
+            buffersize,
+            drawing.points,
+            points,
+        );
+        for (0..self.swapchain.images.len) |i| {
+            try vkbuffer.createbuffer(
+                self.logicaldevice,
+                self.physicaldevice,
+                buffersize,
+                vk.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | vk.VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | vk.VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                vk.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                &self.shaderstoragebuffers[i],
+                &self.shaderstoragebuffersmemory[i],
+            );
+            try vkbuffer.copybuffertobuffer(
+                self.commandpoolonetimecommand,
+                stagingbuffer,
+                self.shaderstoragebuffers[i],
+                buffersize,
+            );
+        }
+        vk.vkDestroyBuffer(self.logicaldevice.device, stagingbuffer, null);
+        vk.vkFreeMemory(self.logicaldevice.device, stagingbuffermemory, null);
+    }
+    fn destroyshaderstoragebuffer(self: *graphicalcontext) void {
+        for (0..self.swapchain.images.len) |i| {
+            vk.vkDestroyBuffer(self.logicaldevice.device, self.shaderstoragebuffers[i], null);
+            vk.vkFreeMemory(self.logicaldevice.device, self.shaderstoragebuffersmemory[i], null);
+        }
+        self.allocator.free(self.shaderstoragebuffers);
+        self.allocator.free(self.shaderstoragebuffersmemory);
     }
     fn createcolorresources(self: *graphicalcontext) !void {
         try vkimage.createimage(
@@ -682,6 +751,7 @@ const vkdescriptor = @import("vulkan/descriptor.zig");
 const vkcommandbuffer = @import("vulkan/commandbuffer.zig");
 const vkbuffer = @import("vulkan/buffer.zig");
 const resourceloading = @import("resourceloading.zig");
+const mathmatrix = @import("mathmatrix.zig");
 const helper = @import("helpers.zig");
 const main = @import("main.zig");
 const std = @import("std");

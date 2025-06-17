@@ -77,6 +77,9 @@ fn mat4x4multi(a: [4][4]f32, b: [4][4]f32) [4][4]f32 {
 fn vec3dot(a: [3]f32, b: [3]f32) f32 {
     return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 }
+fn vec2dot(a: [2]f32, b: [2]f32) f32 {
+    return a[0] * b[0] + a[1] * b[1];
+}
 ///axb
 fn vec3cross(a: [3]f32, b: [3]f32) [3]f32 {
     const x = a[1] * b[2] - a[2] * b[1];
@@ -90,6 +93,11 @@ fn vec3normalize(vect: [3]f32) [3]f32 {
     const magnitude = std.math.sqrt(vec3dot(vect, vect));
     if (magnitude == 0.0) return .{ 0.0, 0.0, 0.0 };
     return .{ vect[0] / magnitude, vect[1] / magnitude, vect[2] / magnitude };
+}
+pub fn vec2normalize(vect: [2]f32) [2]f32 {
+    const magnitude = std.math.sqrt(vec2dot(vect, vect));
+    if (magnitude == 0.0) return .{ 0.0, 0.0 };
+    return .{ vect[0] / magnitude, vect[1] / magnitude };
 }
 ///a+b
 fn vec3add(a: [3]f32, b: [3]f32) [3]f32 {
