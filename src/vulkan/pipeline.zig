@@ -1,5 +1,8 @@
 const triangle_frag = @embedFile("../spirv/triangle_frag.spv");
 const triangle_vert = @embedFile("../spirv/triangle_vert.spv");
+const point_frag = @embedFile("../spirv/point_frag.spv");
+const point_comp = @embedFile("../spirv/point_comp.spv");
+const point_vert = @embedFile("../spirv/point_vert.spv");
 fn createshadermodule(code: []const u32, logicaldevice: *vklogicaldevice.LogicalDevice) !vk.VkShaderModule {
     var createinfo: vk.VkShaderModuleCreateInfo = .{};
     createinfo.sType = vk.VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
@@ -172,7 +175,7 @@ pub fn computepipeline(
     pipelinelayout: *vk.VkPipelineLayout,
     pipeline: *vk.VkPipeline,
 ) !void {
-    const computecodeslice = @as([*]const u32, @ptrCast(@alignCast(triangle_frag)))[0 .. triangle_frag.len / @sizeOf(u32)];
+    const computecodeslice = @as([*]const u32, @ptrCast(@alignCast(point_comp)))[0 .. point_comp.len / @sizeOf(u32)];
 
     const computeshadermodule = try createshadermodule(computecodeslice, logicaldevice);
 
