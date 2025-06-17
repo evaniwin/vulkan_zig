@@ -186,7 +186,7 @@ fn drawframe(vkinstance: *utilty.graphicalcontext) !void {
 }
 
 fn updateuniformbuffer(frame: usize, vkinstance: *utilty.graphicalcontext) !void {
-    var ubo: drawing.uniformbufferobject = undefined;
+    var ubo: drawing.uniformbufferobject_view_lookat_projection_matrix = undefined;
     ubo.model = mathmatrix.rotate(
         @floatCast(std.math.degreesToRadians(@as(f32, @floatFromInt(timer.read())) / 10000000)),
         .{ 0, 1, 0 },
@@ -200,7 +200,7 @@ fn updateuniformbuffer(frame: usize, vkinstance: *utilty.graphicalcontext) !void
         100.0,
     );
 
-    const ptr: [*]drawing.uniformbufferobject = @ptrCast(@alignCast(vkinstance.uniformbuffermemotymapped[frame]));
+    const ptr: [*]drawing.uniformbufferobject_view_lookat_projection_matrix = @ptrCast(@alignCast(vkinstance.uniformbuffermemotymapped[frame]));
     ptr[0] = ubo;
 }
 const freetype = @cImport({

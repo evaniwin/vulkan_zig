@@ -24,7 +24,7 @@ pub const graphicalcontext = struct {
     swapchainframebuffers: []vk.VkFramebuffer,
     commandpool: *vkcommandbuffer.commandpool,
     commandpoolonetimecommand: *vkcommandbuffer.commandpool,
-    descriptorpool: *vkpipeline.descriptorpool,
+    descriptorpool: *vkdescriptor.descriptorpool,
 
     vertexbuffer: vk.VkBuffer,
     vertexbuffermemory: vk.VkDeviceMemory,
@@ -119,7 +119,7 @@ pub const graphicalcontext = struct {
             try self.finddepthformat(),
             &self.renderpass,
         );
-        try vkpipeline.createdescriptorsetlayout(self.logicaldevice, &self.descriptorsetlayout);
+        try vkdescriptor.creategraphicsdescriptorsetlayout(self.logicaldevice, &self.descriptorsetlayout);
         try vkpipeline.creategraphicspipeline(
             self.logicaldevice,
             self.renderpass,
@@ -138,14 +138,14 @@ pub const graphicalcontext = struct {
         try createvertexbuffer(self);
         try createindexbuffer(self);
         try createuniformbuffers(self);
-        const descriptorpoolcreateparams: vkpipeline.descriptorpoolcreateinfo = .{
+        const descriptorpoolcreateparams: vkdescriptor.descriptorpoolcreateinfo = .{
             .allocator = self.allocator,
             .logicaldevice = self.logicaldevice,
             .descriptorsetlayout = self.descriptorsetlayout,
             .descriptorcount = @intCast(self.swapchain.images.len),
         };
-        self.descriptorpool = try vkpipeline.descriptorpool.createdescriptorpool(descriptorpoolcreateparams);
-        try self.descriptorpool.createdescriptorSets(
+        self.descriptorpool = try vkdescriptor.descriptorpool.init_createdescriptorpool_graphics(descriptorpoolcreateparams);
+        try self.descriptorpool.createdescriptorSets_graphics(
             self.uniformbuffer,
             self.textureimageview,
             self.textureimagesampler,
@@ -172,7 +172,7 @@ pub const graphicalcontext = struct {
         self.model.freemodeldata();
         destroyuniformbuffers(self);
         self.descriptorpool.destroydescriptorpool();
-        vkpipeline.destroydescriptorsetlayout(self.logicaldevice, self.descriptorsetlayout);
+        vkdescriptor.destroydescriptorsetlayout(self.logicaldevice, self.descriptorsetlayout);
         destroyindexbuffer(self);
         destroyvertexbuffer(self);
         self.logicaldevice.destroylogicaldevice();
@@ -476,7 +476,7 @@ pub const graphicalcontext = struct {
     }
 
     fn createuniformbuffers(self: *graphicalcontext) !void {
-        const buffersize = @sizeOf(drawing.uniformbufferobject);
+        const buffersize = @sizeOf(drawing.uniformbufferobject_view_lookat_projection_matrix);
         const count = self.swapchain.images.len;
         self.uniformbuffer = try self.allocator.alloc(vk.VkBuffer, count);
         self.uniformbuffermemory = try self.allocator.alloc(vk.VkDeviceMemory, count);
@@ -678,6 +678,7 @@ const vklogicaldevice = @import("vulkan/logicaldevice.zig");
 const vkimage = @import("vulkan/image.zig");
 const vkrenderpass = @import("vulkan/renderpass.zig");
 const vkpipeline = @import("vulkan/pipeline.zig");
+const vkdescriptor = @import("vulkan/descriptor.zig");
 const vkcommandbuffer = @import("vulkan/commandbuffer.zig");
 const vkbuffer = @import("vulkan/buffer.zig");
 const resourceloading = @import("resourceloading.zig");
