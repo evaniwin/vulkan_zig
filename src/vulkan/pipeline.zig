@@ -19,7 +19,7 @@ pub fn creategraphicspipeline(
     physicaldevice: *vkinstance.PhysicalDevice,
     descriptorsetlayout: vk.VkDescriptorSetLayout,
     pipelinelayout: *vk.VkPipelineLayout,
-    graphicspipeline: *vk.VkPipeline,
+    pipeline: *vk.VkPipeline,
 ) !void {
     //cast a slice of u8 to slice of u32
     const vertcodeslice = @as([*]const u32, @ptrCast(@alignCast(triangle_vert)))[0 .. triangle_vert.len / @sizeOf(u32)];
@@ -158,7 +158,7 @@ pub fn creategraphicspipeline(
     graphicspipelinecreateinfo.basePipelineHandle = null;
     graphicspipelinecreateinfo.basePipelineIndex = -1;
 
-    if (vk.vkCreateGraphicsPipelines(logicaldevice.device, null, 1, &graphicspipelinecreateinfo, null, graphicspipeline) != vk.VK_SUCCESS) {
+    if (vk.vkCreateGraphicsPipelines(logicaldevice.device, null, 1, &graphicspipelinecreateinfo, null, pipeline) != vk.VK_SUCCESS) {
         std.log.err("Unable to Create Pipeline", .{});
         return error.PipelineCreationFailed;
     }
@@ -166,7 +166,50 @@ pub fn creategraphicspipeline(
     vk.vkDestroyShaderModule(logicaldevice.device, vertshadermodule, null);
     vk.vkDestroyShaderModule(logicaldevice.device, fragshadermodule, null);
 }
+pub fn computepipeline(
+    logicaldevice: *vklogicaldevice.LogicalDevice,
+    descriptorsetlayout: vk.VkDescriptorSetLayout,
+    pipelinelayout: *vk.VkPipelineLayout,
+    pipeline: *vk.VkPipeline,
+) !void {
+    const computecodeslice = @as([*]const u32, @ptrCast(@alignCast(triangle_frag)))[0 .. triangle_frag.len / @sizeOf(u32)];
 
+    const computeshadermodule = try createshadermodule(computecodeslice, logicaldevice);
+
+    var computeshadercreateinfo: vk.VkPipelineShaderStageCreateInfo = .{};
+    computeshadercreateinfo.sType = vk.VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    computeshadercreateinfo.stage = vk.VK_SHADER_STAGE_COMPUTE_BIT;
+    computeshadercreateinfo.module = computeshadermodule;
+    computeshadercreateinfo.pName = "main";
+
+    var setlayouts: [1]vk.VkDescriptorSetLayout = .{descriptorsetlayout};
+    var pipelinelayoutcreateinfo: vk.VkPipelineLayoutCreateInfo = .{};
+    pipelinelayoutcreateinfo.sType = vk.VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    pipelinelayoutcreateinfo.setLayoutCount = 1;
+    pipelinelayoutcreateinfo.pSetLayouts = &setlayouts[0];
+    pipelinelayoutcreateinfo.pushConstantRangeCount = 0;
+    pipelinelayoutcreateinfo.pPushConstantRanges = null;
+    pipelinelayoutcreateinfo.flags = 0;
+    pipelinelayoutcreateinfo.pNext = null;
+
+    if (vk.vkCreatePipelineLayout(logicaldevice.device, &pipelinelayoutcreateinfo, null, pipelinelayout) != vk.VK_SUCCESS) {
+        std.log.err("Unable to Create Pipeline Layout", .{});
+        return error.PipelineCreationFailedLayout;
+    }
+    var pipelinecreateinfo: vk.VkComputePipelineCreateInfo = .{};
+    pipelinecreateinfo.sType = vk.VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+    pipelinecreateinfo.pNext = null;
+    pipelinecreateinfo.flags = 0;
+    pipelinecreateinfo.stage = computeshadercreateinfo;
+    pipelinecreateinfo.layout = pipelinelayout.*;
+    pipelinecreateinfo.basePipelineHandle = null;
+    pipelinecreateinfo.basePipelineIndex = 0;
+
+    if (vk.vkCreateComputePipelines(logicaldevice.device, null, 1, &pipelinecreateinfo, null, pipeline) != vk.VK_SUCCESS) {
+        std.log.err("Unable to Create compute Pipeline", .{});
+        return error.PipelineCreationFailed;
+    }
+}
 const vertexbufferconfig = struct {
     pub fn getbindingdescription(T: type) vk.VkVertexInputBindingDescription {
         var bindingdescription: vk.VkVertexInputBindingDescription = .{};
