@@ -109,7 +109,7 @@ pub fn createrenderpass_compute(
     subpassdependency.dstStageMask = vk.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
     subpassdependency.dstAccessMask = vk.VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
 
-    var attachments: [3]vk.VkAttachmentDescription = .{colorattachment};
+    var attachments: [1]vk.VkAttachmentDescription = .{colorattachment};
     var renderpasscreateinfo: vk.VkRenderPassCreateInfo = .{};
     renderpasscreateinfo.sType = vk.VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
     renderpasscreateinfo.attachmentCount = attachments.len;

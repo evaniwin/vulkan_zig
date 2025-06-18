@@ -176,8 +176,8 @@ pub fn creategraphicspipeline_compute(
     pipeline: *vk.VkPipeline,
 ) !void {
     //cast a slice of u8 to slice of u32
-    const vertcodeslice = @as([*]const u32, @ptrCast(@alignCast(point_vert)))[0 .. triangle_vert.len / @sizeOf(u32)];
-    const fragcodeslice = @as([*]const u32, @ptrCast(@alignCast(point_frag)))[0 .. triangle_frag.len / @sizeOf(u32)];
+    const vertcodeslice = @as([*]const u32, @ptrCast(@alignCast(point_vert)))[0 .. point_vert.len / @sizeOf(u32)];
+    const fragcodeslice = @as([*]const u32, @ptrCast(@alignCast(point_frag)))[0 .. point_frag.len / @sizeOf(u32)];
 
     const vertshadermodule = try createshadermodule(vertcodeslice, logicaldevice);
     const fragshadermodule = try createshadermodule(fragcodeslice, logicaldevice);
@@ -310,7 +310,7 @@ pub fn creategraphicspipeline_compute(
     vk.vkDestroyShaderModule(logicaldevice.device, vertshadermodule, null);
     vk.vkDestroyShaderModule(logicaldevice.device, fragshadermodule, null);
 }
-pub fn computepipeline(
+pub fn createcomputepipeline(
     logicaldevice: *vklogicaldevice.LogicalDevice,
     descriptorsetlayout: vk.VkDescriptorSetLayout,
     pipelinelayout: *vk.VkPipelineLayout,

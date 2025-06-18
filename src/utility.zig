@@ -3,6 +3,7 @@ var validationlayerInstanceExtensions: [1][*c]const u8 = .{"VK_EXT_debug_utils"}
 var deviceextensions: [1][*c]const u8 = .{"VK_KHR_swapchain"};
 const enablevalidationlayers: bool = true;
 const validationlayerverbose: bool = false;
+const particlecount = 256 * 4;
 
 pub const graphicalcontext = struct {
     allocator: std.mem.Allocator,
@@ -57,6 +58,8 @@ pub const graphicalcontext = struct {
     computefinishedsephamores: []vk.VkSemaphore,
     computeinflightfences: []vk.VkFence,
     model: parseobj.model,
+    lastframetime: f32,
+    lasttime: f64,
     pub fn init(allocator: std.mem.Allocator, window: *vk.GLFWwindow) !*graphicalcontext {
         //allocate an instance of this struct
         const self: *graphicalcontext = allocator.create(graphicalcontext) catch |err| {
@@ -120,59 +123,96 @@ pub const graphicalcontext = struct {
         self.swapchainimageviews = try vkimage.imageviews.createimageviews(imageviewparams);
 
         try createsyncobjects(self);
-        try vkrenderpass.createrenderpass(
+        //try vkrenderpass.createrenderpass(
+        //    self.logicaldevice,
+        //    self.swapchain,
+        //    self.physicaldevice,
+        //    try self.finddepthformat(),
+        //    &self.renderpass,
+        //);
+        //try vkdescriptor.creategraphicsdescriptorsetlayout(self.logicaldevice, &self.descriptorsetlayout);
+        //try vkpipeline.creategraphicspipeline(
+        //    self.logicaldevice,
+        //    self.renderpass,
+        //    self.physicaldevice,
+        //    self.descriptorsetlayout,
+        //    &self.pipelinelayout,
+        //    &self.graphicspipeline,
+        //);
+        //try createcommandpools(self);
+        //try createcolorresources(self);
+        //try createdepthresources(self);
+        //try createswapchainframebuffers(self);
+        //try createtextureimage(self);
+        //try createtextureimageview(self);
+        //try createtextureimagesampler(self);
+        //try createvertexbuffer(self);
+        //try createindexbuffer(self);
+        //try createuniformbuffers(self);
+        //const descriptorpoolcreateparams: vkdescriptor.descriptorpoolcreateinfo = .{
+        //    .allocator = self.allocator,
+        //    .logicaldevice = self.logicaldevice,
+        //    .descriptorsetlayout = self.descriptorsetlayout,
+        //    .descriptorcount = @intCast(self.swapchain.images.len),
+        //};
+        //self.descriptorpool = try vkdescriptor.descriptorpool.init_createdescriptorpool_graphics(descriptorpoolcreateparams);
+        //try self.descriptorpool.createdescriptorSets_graphics(
+        //    self.uniformbuffer,
+        //    self.textureimageview,
+        //    self.textureimagesampler,
+        //);
+        try vkrenderpass.createrenderpass_compute(
             self.logicaldevice,
             self.swapchain,
-            self.physicaldevice,
-            try self.finddepthformat(),
             &self.renderpass,
         );
-        try vkdescriptor.creategraphicsdescriptorsetlayout(self.logicaldevice, &self.descriptorsetlayout);
-        try vkpipeline.creategraphicspipeline(
+        try vkdescriptor.createcomputedescriptorsetlayout(self.logicaldevice, &self.computedescriptorsetlayout);
+        try vkpipeline.creategraphicspipeline_compute(
             self.logicaldevice,
             self.renderpass,
-            self.physicaldevice,
-            self.descriptorsetlayout,
             &self.pipelinelayout,
             &self.graphicspipeline,
         );
+        try vkpipeline.createcomputepipeline(
+            self.logicaldevice,
+            self.computedescriptorsetlayout,
+            &self.computepipelinelayout,
+            &self.computepipeline,
+        );
         try createcommandpools(self);
-        try createcolorresources(self);
-        try createdepthresources(self);
-        try createswapchainframebuffers(self);
-        try createtextureimage(self);
-        try createtextureimageview(self);
-        try createtextureimagesampler(self);
-        try createvertexbuffer(self);
-        try createindexbuffer(self);
-        try createuniformbuffers(self);
+        try createswapchainframebuffers_compute(self);
+        try createshaderstoragebuffer(self);
+        try createuniformbuffers_compute(self);
         const descriptorpoolcreateparams: vkdescriptor.descriptorpoolcreateinfo = .{
             .allocator = self.allocator,
             .logicaldevice = self.logicaldevice,
-            .descriptorsetlayout = self.descriptorsetlayout,
+            .descriptorsetlayout = self.computedescriptorsetlayout,
             .descriptorcount = @intCast(self.swapchain.images.len),
         };
-        self.descriptorpool = try vkdescriptor.descriptorpool.init_createdescriptorpool_graphics(descriptorpoolcreateparams);
-        try self.descriptorpool.createdescriptorSets_graphics(
+        self.computedescriptorpool = try vkdescriptor.descriptorpool.init_createdescriptorpool_compute(descriptorpoolcreateparams);
+        try self.computedescriptorpool.createdescriptorSets_compute(
             self.uniformbuffer,
-            self.textureimageview,
-            self.textureimagesampler,
+            self.shaderstoragebuffers,
+            particlecount,
         );
+
         try self.commandpool.createcommandbuffer(0, @intCast(self.swapchain.images.len), vk.VK_COMMAND_BUFFER_LEVEL_PRIMARY);
         try self.commandpool.createcommandbuffer(1, @intCast(self.swapchain.images.len), vk.VK_COMMAND_BUFFER_LEVEL_PRIMARY);
         return self;
     }
     pub fn deinit(self: *graphicalcontext) void {
         destroysyncobjects(self);
-        destroytextureimagesampler(self);
-        destroytextureimageview(self);
-        vkimage.destroyimage(self.logicaldevice, self.textureimage, self.textureimagememory);
+        //destroytextureimagesampler(self);
+        //destroytextureimageview(self);
+        //vkimage.destroyimage(self.logicaldevice, self.textureimage, self.textureimagememory);
         destroycommandpools(self);
         destroyswapchainframebuffers(self);
-        destroydepthresources(self);
-        destroycolorresources(self);
+        //destroydepthresources(self);
+        //destroycolorresources(self);
         vk.vkDestroyPipeline(self.logicaldevice.device, self.graphicspipeline, null);
         vk.vkDestroyPipelineLayout(self.logicaldevice.device, self.pipelinelayout, null);
+        vk.vkDestroyPipeline(self.logicaldevice.device, self.computepipeline, null);
+        vk.vkDestroyPipelineLayout(self.logicaldevice.device, self.computepipelinelayout, null);
         vk.vkDestroyRenderPass(self.logicaldevice.device, self.renderpass, null);
         self.swapchainimageviews.destroyimageviews();
 
@@ -180,10 +220,12 @@ pub const graphicalcontext = struct {
 
         self.model.freemodeldata();
         destroyuniformbuffers(self);
-        self.descriptorpool.destroydescriptorpool();
-        vkdescriptor.destroydescriptorsetlayout(self.logicaldevice, self.descriptorsetlayout);
-        destroyindexbuffer(self);
-        destroyvertexbuffer(self);
+        destroyshaderstoragebuffer(self);
+        self.computedescriptorpool.destroydescriptorpool();
+        //vkdescriptor.destroydescriptorsetlayout(self.logicaldevice, self.descriptorsetlayout);
+        vkdescriptor.destroydescriptorsetlayout(self.logicaldevice, self.computedescriptorsetlayout);
+        //destroyindexbuffer(self);
+        //destroyvertexbuffer(self);
         self.logicaldevice.destroylogicaldevice();
         vk.vkDestroySurfaceKHR(self.instance.instance, self.surface, null);
         self.physicaldevice.deinit();
@@ -291,7 +333,13 @@ pub const graphicalcontext = struct {
         const offsets: [1]vk.VkDeviceSize = .{0};
         vk.vkCmdBindVertexBuffers(commandbuffer, 0, 1, &self.shaderstoragebuffers[imageindex], &offsets[0]);
 
-        vk.vkCmdDraw(commandbuffer, @intCast(self.model.indices.len), 1, 0, 0, 0);
+        vk.vkCmdDraw(
+            commandbuffer,
+            particlecount,
+            1,
+            0,
+            0,
+        );
 
         vk.vkCmdEndRenderPass(commandbuffer);
 
@@ -310,22 +358,29 @@ pub const graphicalcontext = struct {
             return error.FailedToBeginRecordingCommandBuffer;
         }
 
-        vk.vkCmdBindPipeline(commandbuffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.graphicspipeline);
-
+        vk.vkCmdBindPipeline(
+            commandbuffer,
+            vk.VK_PIPELINE_BIND_POINT_COMPUTE,
+            self.computepipeline,
+        );
+        var descriptorsets: [1]vk.VkDescriptorSet = .{self.computedescriptorpool.descriptorsets[imageindex]};
         vk.vkCmdBindDescriptorSets(
             commandbuffer,
             vk.VK_PIPELINE_BIND_POINT_COMPUTE,
             self.computepipelinelayout,
             0,
             1,
-            self.computedescriptorpool.descriptorsets[imageindex],
+            &descriptorsets[0],
             0,
             null,
         );
 
-        vk.vkCmdDraw(commandbuffer, @intCast(self.model.indices.len), 1, 0, 0, 0);
-
-        vk.vkCmdEndRenderPass(commandbuffer);
+        vk.vkCmdDispatch(
+            commandbuffer,
+            particlecount / 256,
+            1,
+            1,
+        );
 
         if (vk.vkEndCommandBuffer(commandbuffer) != vk.VK_SUCCESS) {
             std.log.err("Unable to End Recording Commandbuffer", .{});
@@ -346,8 +401,8 @@ pub const graphicalcontext = struct {
         const swapchain = try vkswapchain.swapchain.createswapchain(swapchaincreateparams);
 
         _ = vk.vkDeviceWaitIdle(self.logicaldevice.device);
-        destroycolorresources(self);
-        destroydepthresources(self);
+        // destroycolorresources(self);
+        // destroydepthresources(self);
 
         self.swapchainimageviews.destroyimageviews();
         vk.vkDestroyRenderPass(self.logicaldevice.device, self.renderpass, null);
@@ -363,34 +418,31 @@ pub const graphicalcontext = struct {
             .images = self.swapchain.images,
         };
         self.swapchainimageviews = try vkimage.imageviews.createimageviews(imageviewparams);
-        try createcolorresources(self);
-        try createdepthresources(self);
-        try vkrenderpass.createrenderpass(
+        //try createcolorresources(self);
+        //try createdepthresources(self);
+        try vkrenderpass.createrenderpass_compute(
             self.logicaldevice,
             self.swapchain,
-            self.physicaldevice,
-            try self.finddepthformat(),
             &self.renderpass,
         );
-        try createswapchainframebuffers(self);
+        try createswapchainframebuffers_compute(self);
         if (swapchainimageslen != self.swapchain.images.len) @panic("swap chain image length mismatch After Recreation");
     }
     fn createshaderstoragebuffer(self: *graphicalcontext) !void {
         self.shaderstoragebuffers = try self.allocator.alloc(vk.VkBuffer, self.swapchain.images.len);
         self.shaderstoragebuffersmemory = try self.allocator.alloc(vk.VkDeviceMemory, self.swapchain.images.len);
 
-        const count = 256;
-        const points = try self.allocator.alloc(drawing.points, count);
+        const points = try self.allocator.alloc(drawing.points, particlecount);
         defer self.allocator.free(points);
         var pgrm = std.Random.Xoroshiro128.init(0);
         const random = pgrm.random();
-        for (0..count) |index| {
-            const theta = -2.0 * std.math.pi * (@as(f32, @floatFromInt(index)) / @as(f32, @floatFromInt(count)));
-            const cx = @as(f32, std.math.sin(theta));
-            const cy = @as(f32, std.math.cos(theta));
+        for (0..particlecount) |index| {
+            const theta = -2.0 * std.math.pi * (@as(f32, @floatFromInt(index)) / @as(f32, @floatFromInt(particlecount)));
+            const cx = 0.5 * @as(f32, std.math.sin(theta));
+            const cy = 0.5 * @as(f32, std.math.cos(theta));
             points[index] = .{
                 .position = .{ cx, cy },
-                .velocity = .{mathmatrix.vec2normalize(.{ cx, cy })},
+                .velocity = mathmatrix.vec2normalize(.{ cx, cy }),
                 .color = .{ random.float(f32), random.float(f32), random.float(f32), 1 },
             };
         }
@@ -435,7 +487,7 @@ pub const graphicalcontext = struct {
         vk.vkFreeMemory(self.logicaldevice.device, stagingbuffermemory, null);
     }
     fn destroyshaderstoragebuffer(self: *graphicalcontext) void {
-        for (0..self.swapchain.images.len) |i| {
+        for (0..self.shaderstoragebuffers.len) |i| {
             vk.vkDestroyBuffer(self.logicaldevice.device, self.shaderstoragebuffers[i], null);
             vk.vkFreeMemory(self.logicaldevice.device, self.shaderstoragebuffersmemory[i], null);
         }
@@ -634,7 +686,25 @@ pub const graphicalcontext = struct {
             self.miplevels,
         );
     }
-
+    fn createuniformbuffers_compute(self: *graphicalcontext) !void {
+        const buffersize = @sizeOf(drawing.uniformbufferobject_deltatime);
+        const count = self.swapchain.images.len;
+        self.uniformbuffer = try self.allocator.alloc(vk.VkBuffer, count);
+        self.uniformbuffermemory = try self.allocator.alloc(vk.VkDeviceMemory, count);
+        self.uniformbuffermemotymapped = try self.allocator.alloc(?*anyopaque, count);
+        for (0..count) |i| {
+            try vkbuffer.createbuffer(
+                self.logicaldevice,
+                self.physicaldevice,
+                buffersize,
+                vk.VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+                vk.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | vk.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                &self.uniformbuffer[i],
+                &self.uniformbuffermemory[i],
+            );
+            _ = vk.vkMapMemory(self.logicaldevice.device, self.uniformbuffermemory[i], 0, buffersize, 0, &self.uniformbuffermemotymapped[i]);
+        }
+    }
     fn createuniformbuffers(self: *graphicalcontext) !void {
         const buffersize = @sizeOf(drawing.uniformbufferobject_view_lookat_projection_matrix);
         const count = self.swapchain.images.len;

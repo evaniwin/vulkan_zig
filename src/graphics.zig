@@ -104,15 +104,118 @@ pub fn draw() !void {
 
         //poll events
         vk.glfwPollEvents();
-        try drawframe(vkinstance);
+        try drawframec(vkinstance);
         windowhandler(window);
         viewportsizeupdate(window, vkinstance);
+        const currenttime = vk.glfwGetTime();
+        vkinstance.lastframetime = @floatCast((currenttime - vkinstance.lasttime) * 0.5);
+        vkinstance.lasttime = currenttime;
     }
     _ = vk.vkDeviceWaitIdle(vkinstance.logicaldevice.device);
 }
 var recreateswapchain: bool = false;
-const MAX_FRAMES_IN_FLIGHT: u32 = 1;
+const MAX_FRAMES_IN_FLIGHT: u32 = 10000000;
 var currentframe: usize = 0;
+fn drawframec(vkinstance: *utilty.graphicalcontext) !void {
+    var submitinfo: vk.VkSubmitInfo = .{};
+    submitinfo.sType = vk.VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    _ = vk.vkWaitForFences(
+        vkinstance.logicaldevice.device,
+        1,
+        &vkinstance.computeinflightfences[currentframe],
+        vk.VK_TRUE,
+        std.math.maxInt(u64),
+    );
+    try updateuniformbuffer(currentframe, vkinstance);
+    _ = vk.vkResetFences(vkinstance.logicaldevice.device, 1, &vkinstance.computeinflightfences[currentframe]);
+    _ = vk.vkResetCommandBuffer(vkinstance.commandpool.commandbuffers[1][currentframe], 0);
+    try vkinstance.recordcomputecommandbuffer(vkinstance.commandpool.commandbuffers[1][currentframe], @intCast(currentframe));
+    var signalsemaphores: [1]vk.VkSemaphore = .{vkinstance.computefinishedsephamores[currentframe]};
+    submitinfo.waitSemaphoreCount = 0;
+    submitinfo.signalSemaphoreCount = 1;
+    submitinfo.pSignalSemaphores = &signalsemaphores[0];
+    submitinfo.commandBufferCount = 1;
+    submitinfo.pCommandBuffers = &vkinstance.commandpool.commandbuffers[1][currentframe];
+    if (vk.vkQueueSubmit(vkinstance.logicaldevice.computequeue.queue, 1, &submitinfo, vkinstance.computeinflightfences[currentframe]) != vk.VK_SUCCESS) {
+        std.log.err("Unable to Submit Queue", .{});
+        return error.QueueSubmissionFailed;
+    }
+
+    _ = vk.vkWaitForFences(
+        vkinstance.logicaldevice.device,
+        1,
+        &vkinstance.inflightfences[currentframe],
+        vk.VK_TRUE,
+        std.math.maxInt(u64),
+    );
+    var imageindex: u32 = undefined;
+    var result = vk.vkAcquireNextImageKHR(
+        vkinstance.logicaldevice.device,
+        vkinstance.swapchain.swapchain,
+        std.math.maxInt(u64),
+        vkinstance.imageavailablesephamores[currentframe],
+        null,
+        &imageindex,
+    );
+    if (result == vk.VK_ERROR_OUT_OF_DATE_KHR) {
+        try vkinstance.recreateswapchains();
+        return;
+    } else if (result != vk.VK_SUCCESS and result != vk.VK_SUBOPTIMAL_KHR) {
+        std.log.err("unable to obtain swapchain image acquire", .{});
+        return;
+    }
+    _ = vk.vkResetFences(vkinstance.logicaldevice.device, 1, &vkinstance.inflightfences[currentframe]);
+    _ = vk.vkResetCommandBuffer(vkinstance.commandpool.commandbuffers[0][currentframe], 0);
+    //try vkinstance.recordcommandbuffer(vkinstance.commandpool.commandbuffers[0][currentframe], imageindex);
+    try vkinstance.recordcommandbuffer_compute(vkinstance.commandpool.commandbuffers[0][currentframe], imageindex);
+
+    submitinfo = .{};
+    submitinfo.sType = vk.VK_STRUCTURE_TYPE_SUBMIT_INFO;
+
+    var waitsemaphores: [2]vk.VkSemaphore = .{
+        vkinstance.computefinishedsephamores[currentframe],
+        vkinstance.imageavailablesephamores[currentframe],
+    };
+    var waitstages: [2]vk.VkPipelineStageFlags = .{
+        vk.VK_PIPELINE_STAGE_VERTEX_INPUT_BIT,
+        vk.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+    };
+    submitinfo.waitSemaphoreCount = waitsemaphores.len;
+    submitinfo.pWaitSemaphores = &waitsemaphores[0];
+    submitinfo.pWaitDstStageMask = &waitstages[0];
+    submitinfo.commandBufferCount = 1;
+    submitinfo.pCommandBuffers = &vkinstance.commandpool.commandbuffers[0][currentframe];
+
+    signalsemaphores = .{vkinstance.renderfinishedsephamores[imageindex]};
+    submitinfo.signalSemaphoreCount = 1;
+    submitinfo.pSignalSemaphores = &signalsemaphores[0];
+
+    if (vk.vkQueueSubmit(vkinstance.logicaldevice.graphicsqueue.queue, 1, &submitinfo, vkinstance.inflightfences[currentframe]) != vk.VK_SUCCESS) {
+        std.log.err("Unable to Submit Queue", .{});
+        return error.QueueSubmissionFailed;
+    }
+    signalsemaphores = .{vkinstance.renderfinishedsephamores[imageindex]};
+    var presentinfo: vk.VkPresentInfoKHR = .{};
+    presentinfo.sType = vk.VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
+    presentinfo.waitSemaphoreCount = 1;
+    presentinfo.pWaitSemaphores = &signalsemaphores[0];
+
+    var swapchains: [1]vk.VkSwapchainKHR = .{vkinstance.swapchain.swapchain};
+    presentinfo.swapchainCount = 1;
+    presentinfo.pSwapchains = &swapchains[0];
+    presentinfo.pImageIndices = &imageindex;
+    presentinfo.pResults = null;
+
+    result = vk.vkQueuePresentKHR(vkinstance.logicaldevice.presentqueue.queue, &presentinfo);
+    if (result == vk.VK_ERROR_OUT_OF_DATE_KHR and result != vk.VK_SUBOPTIMAL_KHR) {
+        try vkinstance.recreateswapchains();
+        return;
+    } else if (result != vk.VK_SUCCESS and result != vk.VK_SUBOPTIMAL_KHR) {
+        std.log.err("unable to obtain swapchain image present", .{});
+        return;
+    }
+    currentframe = (currentframe + 1) % @min(vkinstance.swapchain.images.len, MAX_FRAMES_IN_FLIGHT);
+}
 fn drawframe(vkinstance: *utilty.graphicalcontext) !void {
     _ = vk.vkWaitForFences(
         vkinstance.logicaldevice.device,
@@ -141,7 +244,8 @@ fn drawframe(vkinstance: *utilty.graphicalcontext) !void {
     try updateuniformbuffer(currentframe, vkinstance);
     _ = vk.vkResetFences(vkinstance.logicaldevice.device, 1, &vkinstance.inflightfences[currentframe]);
     _ = vk.vkResetCommandBuffer(vkinstance.commandpool.commandbuffers[0][currentframe], 0);
-    try vkinstance.recordcommandbuffer(vkinstance.commandpool.commandbuffers[0][currentframe], imageindex);
+    //try vkinstance.recordcommandbuffer(vkinstance.commandpool.commandbuffers[0][currentframe], imageindex);
+    try vkinstance.recordcommandbuffer_compute(vkinstance.commandpool.commandbuffers[0][currentframe], imageindex);
 
     var submitinfo: vk.VkSubmitInfo = .{};
     submitinfo.sType = vk.VK_STRUCTURE_TYPE_SUBMIT_INFO;
@@ -186,21 +290,23 @@ fn drawframe(vkinstance: *utilty.graphicalcontext) !void {
 }
 
 fn updateuniformbuffer(frame: usize, vkinstance: *utilty.graphicalcontext) !void {
-    var ubo: drawing.uniformbufferobject_view_lookat_projection_matrix = undefined;
-    ubo.model = mathmatrix.rotate(
-        @floatCast(std.math.degreesToRadians(@as(f32, @floatFromInt(timer.read())) / 10000000)),
-        .{ 0, 1, 0 },
-    );
-    ubo.view = mathmatrix.lookat(.{ 2, 3, 3 }, .{ 0, 0, 0 }, .{ 0, 1, 0 });
-    ubo.projection = mathmatrix.perspective(
-        std.math.degreesToRadians(45),
-        @floatFromInt(vkinstance.swapchain.extent.width),
-        @floatFromInt(vkinstance.swapchain.extent.height),
-        0.1,
-        100.0,
-    );
-
-    const ptr: [*]drawing.uniformbufferobject_view_lookat_projection_matrix = @ptrCast(@alignCast(vkinstance.uniformbuffermemotymapped[frame]));
+    //var ubo: drawing.uniformbufferobject_view_lookat_projection_matrix = undefined;
+    //ubo.model = mathmatrix.rotate(
+    //    @floatCast(std.math.degreesToRadians(@as(f32, @floatFromInt(timer.read())) / 10000000)),
+    //    .{ 0, 1, 0 },
+    //);
+    //ubo.view = mathmatrix.lookat(.{ 2, 3, 3 }, .{ 0, 0, 0 }, .{ 0, 1, 0 });
+    //ubo.projection = mathmatrix.perspective(
+    //    std.math.degreesToRadians(45),
+    //    @floatFromInt(vkinstance.swapchain.extent.width),
+    //    @floatFromInt(vkinstance.swapchain.extent.height),
+    //    0.1,
+    //    100.0,
+    //);
+    //
+    var ubo: drawing.uniformbufferobject_deltatime = undefined;
+    ubo.deltatime = vkinstance.lastframetime * 2;
+    const ptr: [*]drawing.uniformbufferobject_deltatime = @ptrCast(@alignCast(vkinstance.uniformbuffermemotymapped[frame]));
     ptr[0] = ubo;
 }
 const freetype = @cImport({

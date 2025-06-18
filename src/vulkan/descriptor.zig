@@ -26,7 +26,7 @@ pub fn creategraphicsdescriptorsetlayout(logicaldevice: *vklogicaldevice.Logical
     }
 }
 pub fn createcomputedescriptorsetlayout(logicaldevice: *vklogicaldevice.LogicalDevice, descriptorsetlayout: *vk.VkDescriptorSetLayout) !void {
-    var layoutbindings: [2]vk.VkDescriptorSetLayoutBinding = undefined;
+    var layoutbindings: [3]vk.VkDescriptorSetLayoutBinding = undefined;
     layoutbindings[0].binding = 0;
     layoutbindings[0].descriptorType = vk.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     layoutbindings[0].descriptorCount = 1;
@@ -191,6 +191,8 @@ pub const descriptorpool = struct {
     pub fn createdescriptorSets_compute(
         self: *descriptorpool,
         uniformbuffer: []vk.VkBuffer,
+        shaderstoragebuffer: []vk.VkBuffer,
+        particlecount: usize,
     ) !void {
         var descriptorsetlayouts: []vk.VkDescriptorSetLayout = try self.allocator.alloc(vk.VkDescriptorSetLayout, self.descriptorcount);
         defer self.allocator.free(descriptorsetlayouts);
@@ -228,12 +230,12 @@ pub const descriptorpool = struct {
             writedescriptorset[0].pNext = null;
 
             var storagebufferlastframeinfo: vk.VkDescriptorBufferInfo = .{};
-            uniformbufferinfo.buffer = uniformbuffer[i];
-            uniformbufferinfo.offset = 0;
-            uniformbufferinfo.range = @sizeOf(drawing.uniformbufferobject_deltatime);
+            storagebufferlastframeinfo.buffer = shaderstoragebuffer[i];
+            storagebufferlastframeinfo.offset = 0;
+            storagebufferlastframeinfo.range = @sizeOf(drawing.points) * particlecount;
 
             writedescriptorset[1].sType = vk.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            writedescriptorset[1].dstSet = self.descriptorsets[i];
+            writedescriptorset[1].dstSet = self.descriptorsets[(i + self.descriptorcount - 1) % self.descriptorcount];
             writedescriptorset[1].dstBinding = 1;
             writedescriptorset[1].dstArrayElement = 0;
             writedescriptorset[1].descriptorType = vk.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
@@ -244,9 +246,9 @@ pub const descriptorpool = struct {
             writedescriptorset[1].pNext = null;
 
             var storagebuffercurrentframeinfo: vk.VkDescriptorBufferInfo = .{};
-            uniformbufferinfo.buffer = uniformbuffer[i];
-            uniformbufferinfo.offset = 0;
-            uniformbufferinfo.range = @sizeOf(drawing.uniformbufferobject_deltatime);
+            storagebuffercurrentframeinfo.buffer = shaderstoragebuffer[i];
+            storagebuffercurrentframeinfo.offset = 0;
+            storagebuffercurrentframeinfo.range = @sizeOf(drawing.points) * particlecount;
 
             writedescriptorset[2].sType = vk.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
             writedescriptorset[2].dstSet = self.descriptorsets[i];
