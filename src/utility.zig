@@ -438,8 +438,8 @@ pub const graphicalcontext = struct {
         const random = pgrm.random();
         for (0..particlecount) |index| {
             const theta = -2.0 * std.math.pi * (@as(f32, @floatFromInt(index)) / @as(f32, @floatFromInt(particlecount)));
-            const cx = 0.5 * @as(f32, std.math.sin(theta));
-            const cy = 0.5 * @as(f32, std.math.cos(theta));
+            const cx = 0.5 * @as(f32, std.math.sin(theta)) + 0.1 * random.float(f32);
+            const cy = 0.5 * @as(f32, std.math.cos(theta)) + 0.1 * random.float(f32);
             points[index] = .{
                 .position = .{ cx, cy },
                 .velocity = mathmatrix.vec2normalize(.{ cx, cy }),
