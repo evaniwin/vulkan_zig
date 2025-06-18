@@ -19,12 +19,16 @@ pub const graphicalcontext = struct {
     renderpass: vk.VkRenderPass,
 
     descriptorsetlayout: vk.VkDescriptorSetLayout,
+    computedescriptorsetlayout: vk.VkDescriptorSetLayout,
     pipelinelayout: vk.VkPipelineLayout,
+    computepipelinelayout: vk.VkPipelineLayout,
     graphicspipeline: vk.VkPipeline,
+    computepipeline: vk.VkPipeline,
     swapchainframebuffers: []vk.VkFramebuffer,
     commandpool: *vkcommandbuffer.commandpool,
     commandpoolonetimecommand: *vkcommandbuffer.commandpool,
     descriptorpool: *vkdescriptor.descriptorpool,
+    computedescriptorpool: *vkdescriptor.descriptorpool,
 
     vertexbuffer: vk.VkBuffer,
     vertexbuffermemory: vk.VkDeviceMemory,
@@ -155,6 +159,7 @@ pub const graphicalcontext = struct {
             self.textureimagesampler,
         );
         try self.commandpool.createcommandbuffer(0, @intCast(self.swapchain.images.len), vk.VK_COMMAND_BUFFER_LEVEL_PRIMARY);
+        try self.commandpool.createcommandbuffer(1, @intCast(self.swapchain.images.len), vk.VK_COMMAND_BUFFER_LEVEL_PRIMARY);
         return self;
     }
     pub fn deinit(self: *graphicalcontext) void {
@@ -242,7 +247,91 @@ pub const graphicalcontext = struct {
             return error.FailedToEndRecordingCommandBuffer;
         }
     }
+    pub fn recordcommandbuffer_compute(self: *graphicalcontext, commandbuffer: vk.VkCommandBuffer, imageindex: u32) !void {
+        var commandbufferbegininfo: vk.VkCommandBufferBeginInfo = .{};
+        commandbufferbegininfo.sType = vk.VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        commandbufferbegininfo.flags = 0;
+        commandbufferbegininfo.pInheritanceInfo = null;
+        if (vk.vkBeginCommandBuffer(commandbuffer, &commandbufferbegininfo) != vk.VK_SUCCESS) {
+            std.log.err("Unable to Begin Recording Commandbufffer", .{});
+            return error.FailedToBeginRecordingCommandBuffer;
+        }
 
+        var renderpassbegininfo: vk.VkRenderPassBeginInfo = .{};
+        renderpassbegininfo.sType = vk.VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+        renderpassbegininfo.renderPass = self.renderpass;
+        renderpassbegininfo.framebuffer = self.swapchainframebuffers[imageindex];
+        renderpassbegininfo.renderArea.offset = .{ .x = 0, .y = 0 };
+        renderpassbegininfo.renderArea.extent = self.swapchain.extent;
+        var clearcolor: [3]vk.VkClearValue = undefined;
+        clearcolor[0].color = vk.VkClearColorValue{ .int32 = .{ 0, 0, 0, 0 } };
+        clearcolor[1].depthStencil = vk.VkClearDepthStencilValue{ .depth = 1, .stencil = 0 };
+        clearcolor[2].color = vk.VkClearColorValue{ .int32 = .{ 0, 0, 0, 0 } };
+        renderpassbegininfo.clearValueCount = clearcolor.len;
+        renderpassbegininfo.pClearValues = &clearcolor[0];
+
+        vk.vkCmdBeginRenderPass(commandbuffer, &renderpassbegininfo, vk.VK_SUBPASS_CONTENTS_INLINE);
+
+        vk.vkCmdBindPipeline(commandbuffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.graphicspipeline);
+
+        var viewport: vk.VkViewport = .{};
+        viewport.x = 0;
+        viewport.y = 0;
+        viewport.height = @floatFromInt(self.swapchain.extent.height);
+        viewport.width = @floatFromInt(self.swapchain.extent.width);
+        viewport.minDepth = 0;
+        viewport.maxDepth = 1;
+        vk.vkCmdSetViewport(commandbuffer, 0, 1, &viewport);
+
+        var scissor: vk.VkRect2D = .{};
+        scissor.offset = .{ .x = 0, .y = 0 };
+        scissor.extent = self.swapchain.extent;
+        vk.vkCmdSetScissor(commandbuffer, 0, 1, &scissor);
+
+        const offsets: [1]vk.VkDeviceSize = .{0};
+        vk.vkCmdBindVertexBuffers(commandbuffer, 0, 1, &self.shaderstoragebuffers[imageindex], &offsets[0]);
+
+        vk.vkCmdDraw(commandbuffer, @intCast(self.model.indices.len), 1, 0, 0, 0);
+
+        vk.vkCmdEndRenderPass(commandbuffer);
+
+        if (vk.vkEndCommandBuffer(commandbuffer) != vk.VK_SUCCESS) {
+            std.log.err("Unable to End Recording Commandbuffer", .{});
+            return error.FailedToEndRecordingCommandBuffer;
+        }
+    }
+    pub fn recordcomputecommandbuffer(self: *graphicalcontext, commandbuffer: vk.VkCommandBuffer, imageindex: u32) !void {
+        var commandbufferbegininfo: vk.VkCommandBufferBeginInfo = .{};
+        commandbufferbegininfo.sType = vk.VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        commandbufferbegininfo.flags = 0;
+        commandbufferbegininfo.pInheritanceInfo = null;
+        if (vk.vkBeginCommandBuffer(commandbuffer, &commandbufferbegininfo) != vk.VK_SUCCESS) {
+            std.log.err("Unable to Begin Recording Commandbufffer", .{});
+            return error.FailedToBeginRecordingCommandBuffer;
+        }
+
+        vk.vkCmdBindPipeline(commandbuffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.graphicspipeline);
+
+        vk.vkCmdBindDescriptorSets(
+            commandbuffer,
+            vk.VK_PIPELINE_BIND_POINT_COMPUTE,
+            self.computepipelinelayout,
+            0,
+            1,
+            self.computedescriptorpool.descriptorsets[imageindex],
+            0,
+            null,
+        );
+
+        vk.vkCmdDraw(commandbuffer, @intCast(self.model.indices.len), 1, 0, 0, 0);
+
+        vk.vkCmdEndRenderPass(commandbuffer);
+
+        if (vk.vkEndCommandBuffer(commandbuffer) != vk.VK_SUCCESS) {
+            std.log.err("Unable to End Recording Commandbuffer", .{});
+            return error.FailedToEndRecordingCommandBuffer;
+        }
+    }
     pub fn recreateswapchains(self: *graphicalcontext) !void {
         const oldswapchain = self.swapchain;
         const swapchainimageslen = self.swapchain.images.len;
