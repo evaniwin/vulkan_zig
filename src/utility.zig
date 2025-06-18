@@ -187,7 +187,7 @@ pub const graphicalcontext = struct {
             .allocator = self.allocator,
             .logicaldevice = self.logicaldevice,
             .descriptorsetlayout = self.computedescriptorsetlayout,
-            .descriptorcount = @intCast(self.swapchain.images.len),
+            .descriptorcount = 2, //@intCast(self.swapchain.images.len),
         };
         self.computedescriptorpool = try vkdescriptor.descriptorpool.init_createdescriptorpool_compute(descriptorpoolcreateparams);
         try self.computedescriptorpool.createdescriptorSets_compute(
@@ -289,7 +289,7 @@ pub const graphicalcontext = struct {
             return error.FailedToEndRecordingCommandBuffer;
         }
     }
-    pub fn recordcommandbuffer_compute(self: *graphicalcontext, commandbuffer: vk.VkCommandBuffer, imageindex: u32) !void {
+    pub fn recordcommandbuffer_compute(self: *graphicalcontext, commandbuffer: vk.VkCommandBuffer, imageindex: u32, currentframe: u32) !void {
         var commandbufferbegininfo: vk.VkCommandBufferBeginInfo = .{};
         commandbufferbegininfo.sType = vk.VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
         commandbufferbegininfo.flags = 0;
@@ -331,7 +331,7 @@ pub const graphicalcontext = struct {
         vk.vkCmdSetScissor(commandbuffer, 0, 1, &scissor);
 
         const offsets: [1]vk.VkDeviceSize = .{0};
-        vk.vkCmdBindVertexBuffers(commandbuffer, 0, 1, &self.shaderstoragebuffers[imageindex], &offsets[0]);
+        vk.vkCmdBindVertexBuffers(commandbuffer, 0, 1, &self.shaderstoragebuffers[currentframe], &offsets[0]);
 
         vk.vkCmdDraw(
             commandbuffer,
