@@ -4,6 +4,7 @@ var deviceextensions: [1][*c]const u8 = .{"VK_KHR_swapchain"};
 const enablevalidationlayers: bool = true;
 const validationlayerverbose: bool = false;
 const particlecount = 256 * 4;
+pub const MAX_FRAMES_IN_FLIGHT: u32 = 2;
 
 pub const graphicalcontext = struct {
     allocator: std.mem.Allocator,
@@ -57,6 +58,8 @@ pub const graphicalcontext = struct {
     inflightfences: []vk.VkFence,
     computefinishedsephamores: []vk.VkSemaphore,
     computeinflightfences: []vk.VkFence,
+    computepreviousfinishedsephamores: []vk.VkSemaphore,
+    graphicspreviousfinishedsephamores: []vk.VkSemaphore,
     model: parseobj.model,
     lastframetime: f32,
     lasttime: f64,
@@ -76,7 +79,7 @@ pub const graphicalcontext = struct {
             .InstanceExtensions = &[0][*c]const u8{},
             .validationlayers = &validationlayers,
             .validationlayerInstanceExtensions = &validationlayerInstanceExtensions,
-            .enablevalidationlayers = true,
+            .enablevalidationlayers = enablevalidationlayers,
         };
         self.instance = try vkinstance.Instance.createinstance(instanceparams);
         //create surface associated with glfw window
@@ -187,7 +190,7 @@ pub const graphicalcontext = struct {
             .allocator = self.allocator,
             .logicaldevice = self.logicaldevice,
             .descriptorsetlayout = self.computedescriptorsetlayout,
-            .descriptorcount = 2, //@intCast(self.swapchain.images.len),
+            .descriptorcount = MAX_FRAMES_IN_FLIGHT,
         };
         self.computedescriptorpool = try vkdescriptor.descriptorpool.init_createdescriptorpool_compute(descriptorpoolcreateparams);
         try self.computedescriptorpool.createdescriptorSets_compute(
@@ -815,12 +818,16 @@ pub const graphicalcontext = struct {
             vk.vkDestroyFence(self.logicaldevice.device, self.inflightfences[i], null);
             vk.vkDestroySemaphore(self.logicaldevice.device, self.computefinishedsephamores[i], null);
             vk.vkDestroyFence(self.logicaldevice.device, self.computeinflightfences[i], null);
+            vk.vkDestroySemaphore(self.logicaldevice.device, self.computepreviousfinishedsephamores[i], null);
+            vk.vkDestroySemaphore(self.logicaldevice.device, self.graphicspreviousfinishedsephamores[i], null);
         }
         self.allocator.free(self.imageavailablesephamores);
         self.allocator.free(self.renderfinishedsephamores);
         self.allocator.free(self.inflightfences);
         self.allocator.free(self.computefinishedsephamores);
         self.allocator.free(self.computeinflightfences);
+        self.allocator.free(self.computepreviousfinishedsephamores);
+        self.allocator.free(self.graphicspreviousfinishedsephamores);
     }
     fn createsyncobjects(self: *graphicalcontext) !void {
         var sephamorecreateinfo: vk.VkSemaphoreCreateInfo = .{};
@@ -834,6 +841,8 @@ pub const graphicalcontext = struct {
         self.inflightfences = try self.allocator.alloc(vk.VkFence, self.swapchain.images.len);
         self.computefinishedsephamores = try self.allocator.alloc(vk.VkSemaphore, self.swapchain.images.len);
         self.computeinflightfences = try self.allocator.alloc(vk.VkFence, self.swapchain.images.len);
+        self.computepreviousfinishedsephamores = try self.allocator.alloc(vk.VkSemaphore, self.swapchain.images.len);
+        self.graphicspreviousfinishedsephamores = try self.allocator.alloc(vk.VkSemaphore, self.swapchain.images.len);
         for (0..self.swapchain.images.len) |i| {
             if (vk.vkCreateSemaphore(self.logicaldevice.device, &sephamorecreateinfo, null, &self.imageavailablesephamores[i]) != vk.VK_SUCCESS) {
                 std.log.err("Unable to Create Gpu Semaphore", .{});
@@ -854,6 +863,14 @@ pub const graphicalcontext = struct {
             if (vk.vkCreateFence(self.logicaldevice.device, &fencecreateinfo, null, &self.computeinflightfences[i]) != vk.VK_SUCCESS) {
                 std.log.err("Unable to Create Cpu fence (render)", .{});
                 return error.UnableToCreateFence;
+            }
+            if (vk.vkCreateSemaphore(self.logicaldevice.device, &sephamorecreateinfo, null, &self.computepreviousfinishedsephamores[i]) != vk.VK_SUCCESS) {
+                std.log.err("Unable to Create Gpu Semaphore", .{});
+                return error.UnableToCreateSemaphore;
+            }
+            if (vk.vkCreateSemaphore(self.logicaldevice.device, &sephamorecreateinfo, null, &self.graphicspreviousfinishedsephamores[i]) != vk.VK_SUCCESS) {
+                std.log.err("Unable to Create Gpu Semaphore", .{});
+                return error.UnableToCreateSemaphore;
             }
         }
     }

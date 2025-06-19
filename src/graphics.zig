@@ -100,11 +100,12 @@ pub fn draw() !void {
         return;
     };
     defer vkinstance.deinit();
+    try drawframec(vkinstance, true);
     while (main.running) {
 
         //poll events
         vk.glfwPollEvents();
-        try drawframec(vkinstance);
+        try drawframec(vkinstance, false);
         windowhandler(window);
         viewportsizeupdate(window, vkinstance);
         const currenttime = vk.glfwGetTime();
@@ -114,9 +115,9 @@ pub fn draw() !void {
     _ = vk.vkDeviceWaitIdle(vkinstance.logicaldevice.device);
 }
 var recreateswapchain: bool = false;
-const MAX_FRAMES_IN_FLIGHT: u32 = 2;
 var currentframe: usize = 0;
-fn drawframec(vkinstance: *utilty.graphicalcontext) !void {
+var previousframe: usize = 0;
+fn drawframec(vkinstance: *utilty.graphicalcontext, firstframe: bool) !void {
     //wait for compute task to finish
     _ = vk.vkWaitForFences(
         vkinstance.logicaldevice.device,
@@ -131,12 +132,20 @@ fn drawframec(vkinstance: *utilty.graphicalcontext) !void {
     _ = vk.vkResetCommandBuffer(vkinstance.commandpool.commandbuffers[1][currentframe], 0);
     //issue compute commands
     try vkinstance.recordcomputecommandbuffer(vkinstance.commandpool.commandbuffers[1][currentframe], @intCast(currentframe));
-    var signalsemaphores: [1]vk.VkSemaphore = .{vkinstance.computefinishedsephamores[currentframe]};
+    var computesignalsemaphores: [2]vk.VkSemaphore = .{ vkinstance.computefinishedsephamores[currentframe], vkinstance.computepreviousfinishedsephamores[currentframe] };
+    var computewaitsemaphores: [1]vk.VkSemaphore = .{vkinstance.computepreviousfinishedsephamores[previousframe]};
+    var computewaitstages: [1]vk.VkPipelineStageFlags = .{
+        vk.VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+    };
     var submitinfo: vk.VkSubmitInfo = .{};
     submitinfo.sType = vk.VK_STRUCTURE_TYPE_SUBMIT_INFO;
-    submitinfo.waitSemaphoreCount = 0;
-    submitinfo.signalSemaphoreCount = 1;
-    submitinfo.pSignalSemaphores = &signalsemaphores[0];
+    if (firstframe) {
+        submitinfo.waitSemaphoreCount = 0;
+    } else submitinfo.waitSemaphoreCount = computewaitsemaphores.len;
+    submitinfo.pWaitDstStageMask = &computewaitstages[0];
+    submitinfo.pWaitSemaphores = &computewaitsemaphores[0];
+    submitinfo.signalSemaphoreCount = computesignalsemaphores.len;
+    submitinfo.pSignalSemaphores = &computesignalsemaphores[0];
     submitinfo.commandBufferCount = 1;
     submitinfo.pCommandBuffers = &vkinstance.commandpool.commandbuffers[1][currentframe];
     if (vk.vkQueueSubmit(vkinstance.logicaldevice.computequeue.queue, 1, &submitinfo, vkinstance.computeinflightfences[currentframe]) != vk.VK_SUCCESS) {
@@ -178,33 +187,39 @@ fn drawframec(vkinstance: *utilty.graphicalcontext) !void {
         imageindex,
         @intCast(currentframe),
     );
-    var waitsemaphores: [2]vk.VkSemaphore = .{
+
+    var graphicswaitsemaphores: [3]vk.VkSemaphore = .{
         vkinstance.computefinishedsephamores[currentframe],
         vkinstance.imageavailablesephamores[currentframe],
+        vkinstance.graphicspreviousfinishedsephamores[previousframe],
     };
-    signalsemaphores = .{
-        vkinstance.renderfinishedsephamores[imageindex],
-    };
-    var waitstages: [2]vk.VkPipelineStageFlags = .{
+    var waitstages: [3]vk.VkPipelineStageFlags = .{
         vk.VK_PIPELINE_STAGE_VERTEX_INPUT_BIT,
         vk.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+        vk.VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
     };
+    var graphicsignalsemaphores: [2]vk.VkSemaphore = .{
+        vkinstance.renderfinishedsephamores[imageindex],
+        vkinstance.graphicspreviousfinishedsephamores[currentframe],
+    };
+
     submitinfo = .{};
     submitinfo.sType = vk.VK_STRUCTURE_TYPE_SUBMIT_INFO;
-    submitinfo.waitSemaphoreCount = waitsemaphores.len;
-    submitinfo.pWaitSemaphores = &waitsemaphores[0];
+    if (firstframe) {
+        submitinfo.waitSemaphoreCount = 2;
+    } else submitinfo.waitSemaphoreCount = graphicswaitsemaphores.len;
+    submitinfo.pWaitSemaphores = &graphicswaitsemaphores[0];
     submitinfo.pWaitDstStageMask = &waitstages[0];
     submitinfo.commandBufferCount = 1;
     submitinfo.pCommandBuffers = &vkinstance.commandpool.commandbuffers[0][currentframe];
-    submitinfo.signalSemaphoreCount = 1;
-    submitinfo.pSignalSemaphores = &signalsemaphores[0];
+    submitinfo.signalSemaphoreCount = graphicsignalsemaphores.len;
+    submitinfo.pSignalSemaphores = &graphicsignalsemaphores[0];
     if (vk.vkQueueSubmit(vkinstance.logicaldevice.graphicsqueue.queue, 1, &submitinfo, vkinstance.inflightfences[currentframe]) != vk.VK_SUCCESS) {
         std.log.err("Unable to Submit Queue", .{});
         return error.QueueSubmissionFailed;
     }
-
     //issue commands to present queue
-    signalsemaphores = .{
+    var presentwaitsemaphores: [1]vk.VkSemaphore = .{
         vkinstance.renderfinishedsephamores[imageindex],
     };
     var swapchains: [1]vk.VkSwapchainKHR = .{
@@ -213,7 +228,7 @@ fn drawframec(vkinstance: *utilty.graphicalcontext) !void {
     var presentinfo: vk.VkPresentInfoKHR = .{};
     presentinfo.sType = vk.VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
     presentinfo.waitSemaphoreCount = 1;
-    presentinfo.pWaitSemaphores = &signalsemaphores[0];
+    presentinfo.pWaitSemaphores = &presentwaitsemaphores[0];
     presentinfo.swapchainCount = 1;
     presentinfo.pSwapchains = &swapchains[0];
     presentinfo.pImageIndices = &imageindex;
@@ -227,7 +242,8 @@ fn drawframec(vkinstance: *utilty.graphicalcontext) !void {
         return;
     }
     //update current frame with values from 0 to current frame
-    currentframe = (currentframe + 1) % @min(vkinstance.swapchain.images.len, MAX_FRAMES_IN_FLIGHT);
+    previousframe = currentframe;
+    currentframe = (currentframe + 1) % @min(vkinstance.swapchain.images.len, utilty.MAX_FRAMES_IN_FLIGHT);
 }
 fn drawframe(vkinstance: *utilty.graphicalcontext) !void {
     _ = vk.vkWaitForFences(
@@ -299,7 +315,7 @@ fn drawframe(vkinstance: *utilty.graphicalcontext) !void {
         std.log.err("unable to obtain swapchain image present", .{});
         return;
     }
-    currentframe = (currentframe + 1) % @min(vkinstance.swapchain.images.len, MAX_FRAMES_IN_FLIGHT);
+    currentframe = (currentframe + 1) % @min(vkinstance.swapchain.images.len, utilty.MAX_FRAMES_IN_FLIGHT);
 }
 
 fn updateuniformbuffer(frame: usize, vkinstance: *utilty.graphicalcontext) !void {
