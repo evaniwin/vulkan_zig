@@ -49,9 +49,15 @@ pub const LogicalDevice = struct {
         var physicaldevicefeatures: vk.VkPhysicalDeviceFeatures = .{};
         physicaldevicefeatures.samplerAnisotropy = self.physicaldevice.physicaldevicefeatures.samplerAnisotropy;
         physicaldevicefeatures.sampleRateShading = self.physicaldevice.physicaldevicefeatures.sampleRateShading;
+
+        var physicaldevicedynamicrendering: vk.VkPhysicalDeviceDynamicRenderingFeatures = .{};
+        physicaldevicedynamicrendering.sType = vk.VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_FEATURES;
+        physicaldevicedynamicrendering.pNext = null;
+        physicaldevicedynamicrendering.dynamicRendering = vk.VK_TRUE;
         //creating logicaldevice
         var createinfo: vk.VkDeviceCreateInfo = .{};
         createinfo.sType = vk.VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
+        createinfo.pNext = &physicaldevicedynamicrendering;
         createinfo.pQueueCreateInfos = &quecreateinfos[0];
         createinfo.queueCreateInfoCount = quecreateinfos.len;
         createinfo.pEnabledFeatures = &physicaldevicefeatures;
