@@ -63,14 +63,17 @@ pub fn createrenderpass(
     subpassdependency.dstAccessMask = vk.VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | vk.VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
 
     var attachments: [3]vk.VkAttachmentDescription = .{ colorattachment, depthattachment, colorattachmentresolve };
+
+    var subpasses: [1]vk.VkSubpassDescription = .{subpass};
+    var subpassdependencies: [1]vk.VkSubpassDependency = .{subpassdependency};
     var renderpasscreateinfo: vk.VkRenderPassCreateInfo = .{};
     renderpasscreateinfo.sType = vk.VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
     renderpasscreateinfo.attachmentCount = attachments.len;
     renderpasscreateinfo.pAttachments = &attachments[0];
-    renderpasscreateinfo.subpassCount = 1;
-    renderpasscreateinfo.pSubpasses = &subpass;
-    renderpasscreateinfo.dependencyCount = 1;
-    renderpasscreateinfo.pDependencies = &subpassdependency;
+    renderpasscreateinfo.subpassCount = subpasses.len;
+    renderpasscreateinfo.pSubpasses = &subpasses[0];
+    renderpasscreateinfo.dependencyCount = subpassdependencies.len;
+    renderpasscreateinfo.pDependencies = &subpassdependencies[0];
 
     if (vk.vkCreateRenderPass(logicaldevice.device, &renderpasscreateinfo, null, renderpass) != vk.VK_SUCCESS) {
         std.log.err("Unable To create Render Pass", .{});

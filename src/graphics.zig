@@ -102,15 +102,11 @@ pub fn draw() !void {
     defer vkinstance.deinit();
     try drawframec(vkinstance, true);
     while (main.running) {
-
         //poll events
         vk.glfwPollEvents();
         try drawframec(vkinstance, false);
         windowhandler(window);
         viewportsizeupdate(window, vkinstance);
-        const currenttime = vk.glfwGetTime();
-        vkinstance.lastframetime = @floatCast((currenttime - vkinstance.lasttime) * 0.1);
-        vkinstance.lasttime = currenttime;
     }
     _ = vk.vkDeviceWaitIdle(vkinstance.logicaldevice.device);
 }
@@ -333,8 +329,13 @@ fn updateuniformbuffer(frame: usize, vkinstance: *utilty.graphicalcontext) !void
     //    100.0,
     //);
     //
+    const currenttime = vk.glfwGetTime();
+    const delta: f32 = @floatCast((currenttime - vkinstance.lasttime));
+    //low pass filter
+    vkinstance.lastframetime = vkinstance.lastframetime + 0.01 * (delta - vkinstance.lastframetime);
+    vkinstance.lasttime = currenttime;
     var ubo: drawing.uniformbufferobject_deltatime = undefined;
-    ubo.deltatime = vkinstance.lastframetime * 2;
+    ubo.deltatime = vkinstance.lastframetime;
     const ptr: [*]drawing.uniformbufferobject_deltatime = @ptrCast(@alignCast(vkinstance.uniformbuffermemotymapped[frame]));
     ptr[0] = ubo;
 }

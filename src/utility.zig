@@ -3,8 +3,8 @@ var validationlayerInstanceExtensions: [1][*c]const u8 = .{"VK_EXT_debug_utils"}
 var deviceextensions: [1][*c]const u8 = .{"VK_KHR_swapchain"};
 const enablevalidationlayers: bool = true;
 const validationlayerverbose: bool = false;
-const particlecount = 256 * 4;
-pub const MAX_FRAMES_IN_FLIGHT: u32 = 2;
+const particlecount = 256 * 1;
+pub const MAX_FRAMES_IN_FLIGHT: u32 = 3;
 
 pub const graphicalcontext = struct {
     allocator: std.mem.Allocator,
@@ -61,7 +61,7 @@ pub const graphicalcontext = struct {
     computepreviousfinishedsephamores: []vk.VkSemaphore,
     graphicspreviousfinishedsephamores: []vk.VkSemaphore,
     model: parseobj.model,
-    lastframetime: f32,
+    lastframetime: f32 = 0.00005,
     lasttime: f64,
     pub fn init(allocator: std.mem.Allocator, window: *vk.GLFWwindow) !*graphicalcontext {
         //allocate an instance of this struct
@@ -486,6 +486,7 @@ pub const graphicalcontext = struct {
                 buffersize,
             );
         }
+
         vk.vkDestroyBuffer(self.logicaldevice.device, stagingbuffer, null);
         vk.vkFreeMemory(self.logicaldevice.device, stagingbuffermemory, null);
     }
