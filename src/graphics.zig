@@ -250,7 +250,6 @@ fn drawframe(vkinstance: *utilty.graphicalcontext) !void {
         vk.VK_TRUE,
         std.math.maxInt(u64),
     );
-    //TODO The vkAcquireNextImageKHR does not use swapchain image 0 after first loop
     var imageindex: u32 = undefined;
     var result = vk.vkAcquireNextImageKHR(
         vkinstance.logicaldevice.device,

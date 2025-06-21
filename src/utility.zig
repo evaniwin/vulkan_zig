@@ -76,8 +76,7 @@ pub const graphicalcontext = struct {
         };
         self.allocator = allocator;
         self.window = window;
-        //TODO
-        errdefer deinit(self);
+        errdefer self.allocator.destroy(self);
         //create an vulkan instance
         const instanceparams: vkinstance.instancecreateinfo = .{
             .allocator = self.allocator,
@@ -87,8 +86,10 @@ pub const graphicalcontext = struct {
             .enablevalidationlayers = enablevalidationlayers,
         };
         self.instance = try vkinstance.Instance.createinstance(instanceparams);
+        errdefer self.instance.destroyinstance();
         //create surface associated with glfw window
         try createsurface(self.instance.instance, self.window, &self.surface);
+        errdefer vk.vkDestroySurfaceKHR(self.instance.instance, self.surface, null);
         //get physical device with given params
         const physicaldeviceparams: vkinstance.pickphysicaldeviceinfo = .{
             .allocator = self.allocator,
@@ -97,7 +98,9 @@ pub const graphicalcontext = struct {
             .deviceextensions = &deviceextensions,
         };
         self.physicaldevice = try vkinstance.PhysicalDevice.getphysicaldevice(physicaldeviceparams);
+        errdefer self.physicaldevice.deinit();
         self.queuelist = try vklogicaldevice.graphicsqueue.getqueuefamily(self.allocator, self.physicaldevice.physicaldevice);
+        errdefer self.queuelist.deinit();
         const logicaldeviceparams: vklogicaldevice.logicaldeviccecreateinfo = .{
             .allocator = self.allocator,
             .deviceextensions = &deviceextensions,
@@ -108,8 +111,10 @@ pub const graphicalcontext = struct {
             .validationlayers = &validationlayers,
         };
         self.logicaldevice = try vklogicaldevice.LogicalDevice.createlogicaldevice(logicaldeviceparams);
+        errdefer self.logicaldevice.destroylogicaldevice();
         //load an obj model
-        try resourceloading.loadmodel(self.allocator, &self.model, "/home/evaniwin/Work/vulkan_zig/resources/teapot.obj");
+        try resourceloading.loadmodel(self.allocator, &self.model, "resources/teapot.obj");
+        errdefer self.model.freemodeldata();
 
         const swapchaincreateparams: vkswapchain.swapchaincreateinfo = .{
             .allocator = self.allocator,
@@ -120,6 +125,7 @@ pub const graphicalcontext = struct {
             .window = self.window,
         };
         self.swapchain = try vkswapchain.swapchain.createswapchain(swapchaincreateparams);
+        errdefer self.swapchain.freeswapchain();
 
         const imageviewparams: vkimage.imageviewcreateinfo = .{
             .allocator = self.allocator,
@@ -129,10 +135,13 @@ pub const graphicalcontext = struct {
             .images = self.swapchain.images,
         };
         self.swapchainimageviews = try vkimage.imageviews.createimageviews(imageviewparams);
+        errdefer self.swapchainimageviews.destroyimageviews();
 
         try createsyncobjects(self);
+        errdefer destroysyncobjects(self);
 
         try vkdescriptor.creategraphicsdescriptorsetlayout(self.logicaldevice, &self.descriptorsetlayout_3d);
+        errdefer vkdescriptor.destroydescriptorsetlayout(self.logicaldevice, self.descriptorsetlayout_3d);
         const depthformat = try self.finddepthformat();
         try vkpipeline.creategraphicspipeline(
             self.logicaldevice,
@@ -144,15 +153,28 @@ pub const graphicalcontext = struct {
             &self.pipelinelayout_3d,
             &self.graphicspipeline_3d,
         );
+        errdefer {
+            vk.vkDestroyPipeline(self.logicaldevice.device, self.graphicspipeline_3d, null);
+            vk.vkDestroyPipelineLayout(self.logicaldevice.device, self.pipelinelayout_3d, null);
+        }
         try createcommandpools(self);
+        errdefer destroycommandpools(self);
         try createcolorresources(self);
+        errdefer destroycolorresources(self);
         try createdepthresources(self);
+        errdefer destroydepthresources(self);
         try createtextureimage(self);
+        errdefer vkimage.destroyimage(self.logicaldevice, self.textureimage, self.textureimagememory);
         try createtextureimageview(self);
+        errdefer destroytextureimageview(self);
         try createtextureimagesampler(self);
+        errdefer destroytextureimagesampler(self);
         try createvertexbuffer(self);
+        errdefer destroyvertexbuffer(self);
         try createindexbuffer(self);
+        errdefer destroyindexbuffer(self);
         try createuniformbuffers(self);
+        errdefer destroyuniformbuffers(self);
         const descriptorpoolcreateparams_3d: vkdescriptor.descriptorpoolcreateinfo = .{
             .allocator = self.allocator,
             .logicaldevice = self.logicaldevice,
@@ -160,27 +182,39 @@ pub const graphicalcontext = struct {
             .descriptorcount = @intCast(self.swapchain.images.len),
         };
         self.descriptorpool_3d = try vkdescriptor.descriptorpool.init_createdescriptorpool_graphics(descriptorpoolcreateparams_3d);
+        errdefer self.descriptorpool_3d.destroydescriptorpool();
         try self.descriptorpool_3d.createdescriptorSets_graphics(
             self.uniformbuffer_3d,
             self.textureimageview,
             self.textureimagesampler,
         );
         try vkdescriptor.createcomputedescriptorsetlayout(self.logicaldevice, &self.descriptorsetlayout_particle);
+        errdefer vkdescriptor.destroydescriptorsetlayout(self.logicaldevice, self.descriptorsetlayout_particle);
         try vkpipeline.creategraphicspipeline_compute(
             self.logicaldevice,
             self.swapchain,
             &self.pipelinelayout_particle,
             &self.graphicspipeline_particle,
         );
+        errdefer {
+            vk.vkDestroyPipeline(self.logicaldevice.device, self.graphicspipeline_particle, null);
+            vk.vkDestroyPipelineLayout(self.logicaldevice.device, self.pipelinelayout_particle, null);
+        }
         try vkpipeline.createcomputepipeline(
             self.logicaldevice,
             self.descriptorsetlayout_particle,
             &self.computepipelinelayout,
             &self.computepipeline,
         );
+        errdefer {
+            vk.vkDestroyPipeline(self.logicaldevice.device, self.computepipeline, null);
+            vk.vkDestroyPipelineLayout(self.logicaldevice.device, self.computepipelinelayout, null);
+        }
 
         try createshaderstoragebuffer(self);
+        errdefer destroyshaderstoragebuffer(self);
         try createuniformbuffers_compute(self);
+        errdefer destroyuniformbuffers_compute(self);
         const descriptorpoolcreateparams_particle: vkdescriptor.descriptorpoolcreateinfo = .{
             .allocator = self.allocator,
             .logicaldevice = self.logicaldevice,
@@ -188,6 +222,7 @@ pub const graphicalcontext = struct {
             .descriptorcount = MAX_FRAMES_IN_FLIGHT,
         };
         self.descriptorpool_particle = try vkdescriptor.descriptorpool.init_createdescriptorpool_compute(descriptorpoolcreateparams_particle);
+        errdefer self.descriptorpool_particle.destroydescriptorpool();
         try self.descriptorpool_particle.createdescriptorSets_compute(
             self.uniformbuffer_compute,
             self.shaderstoragebuffers,
@@ -793,7 +828,7 @@ pub const graphicalcontext = struct {
             &self.miplevels,
             &width,
             &height,
-            "/home/evaniwin/Work/vulkan_zig/resources/teapot.png",
+            "resources/teapot.png",
         );
         defer self.allocator.free(pixels);
 
