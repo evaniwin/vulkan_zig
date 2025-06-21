@@ -123,11 +123,11 @@ fn drawframec(vkinstance: *utilty.graphicalcontext, firstframe: bool) !void {
         std.math.maxInt(u64),
     );
     //update the uniform buffer with the new delta time reset compute fences and command buffers
-    try updateuniformbuffer(currentframe, vkinstance);
+    try updateuniformbuffer_time(currentframe, vkinstance);
     _ = vk.vkResetFences(vkinstance.logicaldevice.device, 1, &vkinstance.computeinflightfences[currentframe]);
-    _ = vk.vkResetCommandBuffer(vkinstance.commandpool.commandbuffers[2][currentframe], 0);
+    _ = vk.vkResetCommandBuffer(vkinstance.commandpool.commandbuffers[1][currentframe], 0);
     //issue compute commands
-    try vkinstance.recordcomputecommandbuffer(vkinstance.commandpool.commandbuffers[2][currentframe], @intCast(currentframe));
+    try vkinstance.recordcomputecommandbuffer(vkinstance.commandpool.commandbuffers[1][currentframe], @intCast(currentframe));
     var computesignalsemaphores: [2]vk.VkSemaphore = .{ vkinstance.computefinishedsephamores[currentframe], vkinstance.computepreviousfinishedsephamores[currentframe] };
     var computewaitsemaphores: [1]vk.VkSemaphore = .{vkinstance.computepreviousfinishedsephamores[previousframe]};
     var computewaitstages: [1]vk.VkPipelineStageFlags = .{
@@ -143,7 +143,7 @@ fn drawframec(vkinstance: *utilty.graphicalcontext, firstframe: bool) !void {
     submitinfo.signalSemaphoreCount = computesignalsemaphores.len;
     submitinfo.pSignalSemaphores = &computesignalsemaphores[0];
     submitinfo.commandBufferCount = 1;
-    submitinfo.pCommandBuffers = &vkinstance.commandpool.commandbuffers[2][currentframe];
+    submitinfo.pCommandBuffers = &vkinstance.commandpool.commandbuffers[1][currentframe];
     if (vk.vkQueueSubmit(vkinstance.logicaldevice.computequeue.queue, 1, &submitinfo, vkinstance.computeinflightfences[currentframe]) != vk.VK_SUCCESS) {
         std.log.err("Unable to Submit Queue", .{});
         return error.QueueSubmissionFailed;
@@ -174,11 +174,12 @@ fn drawframec(vkinstance: *utilty.graphicalcontext, firstframe: bool) !void {
         std.log.err("unable to obtain swapchain image acquire", .{});
         return;
     }
+    try updateuniformbuffer_matrix(imageindex, vkinstance);
     //reset graphics fences and command buffer
     _ = vk.vkResetFences(vkinstance.logicaldevice.device, 1, &vkinstance.inflightfences[currentframe]);
     _ = vk.vkResetCommandBuffer(vkinstance.commandpool.commandbuffers[0][currentframe], 0);
     //issue commands to graphics queue
-    try vkinstance.recordcommandbuffer_compute(
+    try vkinstance.recordcommandbuffer(
         vkinstance.commandpool.commandbuffers[0][currentframe],
         imageindex,
         @intCast(currentframe),
@@ -266,7 +267,7 @@ fn drawframe(vkinstance: *utilty.graphicalcontext) !void {
         std.log.err("unable to obtain swapchain image acquire", .{});
         return;
     }
-    try updateuniformbuffer(currentframe, vkinstance);
+    try updateuniformbuffer_matrix(currentframe, vkinstance);
     _ = vk.vkResetFences(vkinstance.logicaldevice.device, 1, &vkinstance.inflightfences[currentframe]);
     _ = vk.vkResetCommandBuffer(vkinstance.commandpool.commandbuffers[0][currentframe], 0);
     //try vkinstance.recordcommandbuffer(vkinstance.commandpool.commandbuffers[0][currentframe], imageindex);
@@ -314,30 +315,33 @@ fn drawframe(vkinstance: *utilty.graphicalcontext) !void {
     currentframe = (currentframe + 1) % @min(vkinstance.swapchain.images.len, utilty.MAX_FRAMES_IN_FLIGHT);
 }
 
-fn updateuniformbuffer(frame: usize, vkinstance: *utilty.graphicalcontext) !void {
-    //var ubo: drawing.uniformbufferobject_view_lookat_projection_matrix = undefined;
-    //ubo.model = mathmatrix.rotate(
-    //    @floatCast(std.math.degreesToRadians(@as(f32, @floatFromInt(timer.read())) / 10000000)),
-    //    .{ 0, 1, 0 },
-    //);
-    //ubo.view = mathmatrix.lookat(.{ 2, 3, 3 }, .{ 0, 0, 0 }, .{ 0, 1, 0 });
-    //ubo.projection = mathmatrix.perspective(
-    //    std.math.degreesToRadians(45),
-    //    @floatFromInt(vkinstance.swapchain.extent.width),
-    //    @floatFromInt(vkinstance.swapchain.extent.height),
-    //    0.1,
-    //    100.0,
-    //);
-    //
+fn updateuniformbuffer_time(frame: usize, vkinstance: *utilty.graphicalcontext) !void {
     const currenttime = vk.glfwGetTime();
     const delta: f32 = @floatCast((currenttime - vkinstance.lasttime));
     //low pass filter
     vkinstance.lastframetime = vkinstance.lastframetime + 0.01 * (delta - vkinstance.lastframetime);
     vkinstance.lasttime = currenttime;
-    var ubo: drawing.uniformbufferobject_deltatime = undefined;
-    ubo.deltatime = vkinstance.lastframetime;
-    const ptr: [*]drawing.uniformbufferobject_deltatime = @ptrCast(@alignCast(vkinstance.uniformbuffermemotymapped_compute[frame]));
-    ptr[0] = ubo;
+    var ubo_time: drawing.uniformbufferobject_deltatime = undefined;
+    ubo_time.deltatime = vkinstance.lastframetime;
+    const ptrtime: [*]drawing.uniformbufferobject_deltatime = @ptrCast(@alignCast(vkinstance.uniformbuffermemotymapped_compute[frame]));
+    ptrtime[0] = ubo_time;
+}
+fn updateuniformbuffer_matrix(frame: usize, vkinstance: *utilty.graphicalcontext) !void {
+    var ubo_mat: drawing.uniformbufferobject_view_lookat_projection_matrix = undefined;
+    ubo_mat.model = mathmatrix.rotate(
+        @floatCast(std.math.degreesToRadians(@as(f32, @floatFromInt(timer.read())) / 10000000)),
+        .{ 0, 1, 0 },
+    );
+    ubo_mat.view = mathmatrix.lookat(.{ 2, 3, 3 }, .{ 0, 0, 0 }, .{ 0, 1, 0 });
+    ubo_mat.projection = mathmatrix.perspective(
+        std.math.degreesToRadians(45),
+        @floatFromInt(vkinstance.swapchain.extent.width),
+        @floatFromInt(vkinstance.swapchain.extent.height),
+        0.1,
+        100.0,
+    );
+    const ptr_mat: [*]drawing.uniformbufferobject_view_lookat_projection_matrix = @ptrCast(@alignCast(vkinstance.uniformbuffermemotymapped_3d[frame]));
+    ptr_mat[0] = ubo_mat;
 }
 const freetype = @cImport({
     @cInclude("freetype2/freetype/freetype.h");

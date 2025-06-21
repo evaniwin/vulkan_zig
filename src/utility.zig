@@ -196,7 +196,6 @@ pub const graphicalcontext = struct {
 
         try self.commandpool.createcommandbuffer(0, @intCast(self.swapchain.images.len), vk.VK_COMMAND_BUFFER_LEVEL_PRIMARY);
         try self.commandpool.createcommandbuffer(1, @intCast(self.swapchain.images.len), vk.VK_COMMAND_BUFFER_LEVEL_PRIMARY);
-        try self.commandpool.createcommandbuffer(2, @intCast(self.swapchain.images.len), vk.VK_COMMAND_BUFFER_LEVEL_PRIMARY);
         return self;
     }
     pub fn deinit(self: *graphicalcontext) void {
@@ -234,7 +233,7 @@ pub const graphicalcontext = struct {
         self.queuelist.deinit();
         self.allocator.destroy(self);
     }
-    pub fn recordcommandbuffer(self: *graphicalcontext, commandbuffer: vk.VkCommandBuffer, imageindex: u32) !void {
+    pub fn recordcommandbuffer(self: *graphicalcontext, commandbuffer: vk.VkCommandBuffer, imageindex: u32, currentframe: u32) !void {
         var commandbufferbegininfo: vk.VkCommandBufferBeginInfo = .{};
         commandbufferbegininfo.sType = vk.VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
         commandbufferbegininfo.flags = 0;
@@ -272,77 +271,114 @@ pub const graphicalcontext = struct {
             &imagememorybarrier,
         );
 
-        var renderpassbegininfo: vk.VkRenderPassBeginInfo = .{};
-        renderpassbegininfo.sType = vk.VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-        renderpassbegininfo.renderPass = self.renderpass;
-        renderpassbegininfo.framebuffer = self.swapchainframebuffers[imageindex];
-        renderpassbegininfo.renderArea.offset = .{ .x = 0, .y = 0 };
-        renderpassbegininfo.renderArea.extent = self.swapchain.extent;
-        var clearcolor: [3]vk.VkClearValue = undefined;
-        clearcolor[0].color = vk.VkClearColorValue{ .int32 = .{ 0, 0, 0, 0 } };
-        clearcolor[1].depthStencil = vk.VkClearDepthStencilValue{ .depth = 1, .stencil = 0 };
-        clearcolor[2].color = vk.VkClearColorValue{ .int32 = .{ 0, 0, 0, 0 } };
-        renderpassbegininfo.clearValueCount = clearcolor.len;
-        renderpassbegininfo.pClearValues = &clearcolor[0];
+        {
+            var colorattachment: vk.VkRenderingAttachmentInfo = .{};
+            colorattachment.sType = vk.VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+            colorattachment.pNext = null;
+            colorattachment.imageView = self.colorimageview;
+            colorattachment.imageLayout = vk.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            colorattachment.resolveMode = vk.VK_RESOLVE_MODE_AVERAGE_BIT;
+            colorattachment.resolveImageLayout = vk.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            colorattachment.resolveImageView = self.swapchainimageviews.imageviews[imageindex];
+            colorattachment.loadOp = vk.VK_ATTACHMENT_LOAD_OP_CLEAR;
+            colorattachment.storeOp = vk.VK_ATTACHMENT_STORE_OP_STORE;
+            colorattachment.clearValue = .{ .color = vk.VkClearColorValue{ .int32 = .{ 0, 0, 0, 0 } } };
 
-        var colorattachment: vk.VkRenderingAttachmentInfo = .{};
-        colorattachment.sType = vk.VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
-        colorattachment.pNext = null;
-        colorattachment.imageView = self.colorimageview;
-        colorattachment.imageLayout = vk.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-        colorattachment.resolveMode = 0;
-        colorattachment.resolveImageView = vk.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-        colorattachment.resolveImageView = self.swapchainimageviews.imageviews[imageindex];
-        colorattachment.loadOp = vk.VK_ATTACHMENT_LOAD_OP_CLEAR;
-        colorattachment.storeOp = vk.VK_ATTACHMENT_STORE_OP_STORE;
-        colorattachment.clearValue = .{ .color = vk.VkClearColorValue{ .int32 = .{ 0, 0, 0, 0 } } };
+            var depthattachment: vk.VkRenderingAttachmentInfo = .{};
+            depthattachment.sType = vk.VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+            depthattachment.pNext = null;
+            depthattachment.imageView = self.depthimageview;
+            depthattachment.imageLayout = vk.VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+            depthattachment.loadOp = vk.VK_ATTACHMENT_LOAD_OP_CLEAR;
+            depthattachment.storeOp = vk.VK_ATTACHMENT_STORE_OP_DONT_CARE;
+            depthattachment.clearValue = .{ .depthStencil = vk.VkClearDepthStencilValue{ .depth = 1, .stencil = 0 } };
 
-        var depthattachment: vk.VkRenderingAttachmentInfo = .{};
-        depthattachment.sType = vk.VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
-        depthattachment.pNext = null;
-        depthattachment.imageView = self.depthimageview;
-        depthattachment.imageLayout = vk.VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
-        depthattachment.loadOp = vk.VK_ATTACHMENT_LOAD_OP_CLEAR;
-        depthattachment.storeOp = vk.VK_ATTACHMENT_STORE_OP_DONT_CARE;
-        depthattachment.clearValue = .{ .depthStencil = vk.VkClearDepthStencilValue{ .depth = 1, .stencil = 0 } };
+            var renderinginfo: vk.VkRenderingInfo = .{};
+            renderinginfo.sType = vk.VK_STRUCTURE_TYPE_RENDERING_INFO;
+            renderinginfo.renderArea.offset = .{ .x = 0, .y = 0 };
+            renderinginfo.renderArea.extent = self.swapchain.extent;
+            renderinginfo.layerCount = 1;
+            renderinginfo.colorAttachmentCount = 1;
+            renderinginfo.pColorAttachments = &colorattachment;
+            renderinginfo.pDepthAttachment = &depthattachment;
+            renderinginfo.pStencilAttachment = &depthattachment;
+            vk.vkCmdBeginRendering(commandbuffer, &renderinginfo);
 
-        var renderinginfo: vk.VkRenderingInfo = .{};
-        renderinginfo.sType = vk.VK_STRUCTURE_TYPE_RENDERING_INFO;
-        renderinginfo.renderArea.offset = .{ .x = 0, .y = 0 };
-        renderinginfo.renderArea.extent = self.swapchain.extent;
-        renderinginfo.layerCount = 1;
-        renderinginfo.colorAttachmentCount = 1;
-        renderinginfo.pColorAttachments = &colorattachment;
-        renderinginfo.pDepthAttachment = &depthattachment;
-        renderinginfo.pStencilAttachment = &depthattachment;
-        vk.vkCmdBeginRendering(commandbuffer, &renderinginfo);
+            vk.vkCmdBindPipeline(commandbuffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.graphicspipeline_3d);
 
-        vk.vkCmdBindPipeline(commandbuffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.graphicspipeline_3d);
+            var viewport: vk.VkViewport = .{};
+            viewport.x = 0;
+            viewport.y = 0;
+            viewport.height = @floatFromInt(self.swapchain.extent.height);
+            viewport.width = @floatFromInt(self.swapchain.extent.width);
+            viewport.minDepth = 0;
+            viewport.maxDepth = 1;
+            vk.vkCmdSetViewport(commandbuffer, 0, 1, &viewport);
 
-        var viewport: vk.VkViewport = .{};
-        viewport.x = 0;
-        viewport.y = 0;
-        viewport.height = @floatFromInt(self.swapchain.extent.height);
-        viewport.width = @floatFromInt(self.swapchain.extent.width);
-        viewport.minDepth = 0;
-        viewport.maxDepth = 1;
-        vk.vkCmdSetViewport(commandbuffer, 0, 1, &viewport);
+            var scissor: vk.VkRect2D = .{};
+            scissor.offset = .{ .x = 0, .y = 0 };
+            scissor.extent = self.swapchain.extent;
+            vk.vkCmdSetScissor(commandbuffer, 0, 1, &scissor);
 
-        var scissor: vk.VkRect2D = .{};
-        scissor.offset = .{ .x = 0, .y = 0 };
-        scissor.extent = self.swapchain.extent;
-        vk.vkCmdSetScissor(commandbuffer, 0, 1, &scissor);
+            const vertexbuffers: [1]vk.VkBuffer = .{self.vertexbuffer};
+            const offsets: [1]vk.VkDeviceSize = .{0};
+            vk.vkCmdBindVertexBuffers(commandbuffer, 0, 1, &vertexbuffers[0], &offsets[0]);
+            vk.vkCmdBindIndexBuffer(commandbuffer, self.indexbuffer, 0, vk.VK_INDEX_TYPE_UINT32);
+            vk.vkCmdBindDescriptorSets(commandbuffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.pipelinelayout_3d, 0, 1, &self.descriptorpool_3d.descriptorsets[imageindex], 0, null);
 
-        const vertexbuffers: [1]vk.VkBuffer = .{self.vertexbuffer};
-        const offsets: [1]vk.VkDeviceSize = .{0};
-        vk.vkCmdBindVertexBuffers(commandbuffer, 0, 1, &vertexbuffers[0], &offsets[0]);
-        vk.vkCmdBindIndexBuffer(commandbuffer, self.indexbuffer, 0, vk.VK_INDEX_TYPE_UINT32);
-        vk.vkCmdBindDescriptorSets(commandbuffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.pipelinelayout_3d, 0, 1, &self.descriptorpool_3d.descriptorsets[imageindex], 0, null);
+            vk.vkCmdDrawIndexed(commandbuffer, @intCast(self.model.indices.len), 1, 0, 0, 0);
 
-        vk.vkCmdDrawIndexed(commandbuffer, @intCast(self.model.indices.len), 1, 0, 0, 0);
+            vk.vkCmdEndRendering(commandbuffer);
+        }
+        {
+            var colorattachment: vk.VkRenderingAttachmentInfo = .{};
+            colorattachment.sType = vk.VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+            colorattachment.pNext = null;
+            colorattachment.imageView = self.swapchainimageviews.imageviews[imageindex];
+            colorattachment.imageLayout = vk.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            colorattachment.loadOp = vk.VK_ATTACHMENT_LOAD_OP_LOAD;
+            colorattachment.storeOp = vk.VK_ATTACHMENT_STORE_OP_STORE;
+            const clearcolor: vk.VkClearValue = .{ .color = vk.VkClearColorValue{ .int32 = .{ 0, 0, 0, 0 } } };
+            colorattachment.clearValue = clearcolor;
 
-        vk.vkCmdEndRendering(commandbuffer);
+            var renderinginfo: vk.VkRenderingInfo = .{};
+            renderinginfo.sType = vk.VK_STRUCTURE_TYPE_RENDERING_INFO;
+            renderinginfo.renderArea.offset = .{ .x = 0, .y = 0 };
+            renderinginfo.renderArea.extent = self.swapchain.extent;
+            renderinginfo.layerCount = 1;
+            renderinginfo.colorAttachmentCount = 1;
+            renderinginfo.pColorAttachments = &colorattachment;
+            vk.vkCmdBeginRendering(commandbuffer, &renderinginfo);
 
+            vk.vkCmdBindPipeline(commandbuffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.graphicspipeline_particle);
+
+            var viewport: vk.VkViewport = .{};
+            viewport.x = 0;
+            viewport.y = 0;
+            viewport.height = @floatFromInt(self.swapchain.extent.height);
+            viewport.width = @floatFromInt(self.swapchain.extent.width);
+            viewport.minDepth = 0;
+            viewport.maxDepth = 1;
+            vk.vkCmdSetViewport(commandbuffer, 0, 1, &viewport);
+
+            var scissor: vk.VkRect2D = .{};
+            scissor.offset = .{ .x = 0, .y = 0 };
+            scissor.extent = self.swapchain.extent;
+            vk.vkCmdSetScissor(commandbuffer, 0, 1, &scissor);
+
+            const offsets: [1]vk.VkDeviceSize = .{0};
+            vk.vkCmdBindVertexBuffers(commandbuffer, 0, 1, &self.shaderstoragebuffers[currentframe], &offsets[0]);
+
+            vk.vkCmdDraw(
+                commandbuffer,
+                particlecount,
+                1,
+                0,
+                0,
+            );
+
+            vk.vkCmdEndRendering(commandbuffer);
+        }
         imagememorybarrier = .{};
         imagememorybarrier.sType = vk.VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
         imagememorybarrier.srcAccessMask = vk.VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
@@ -358,14 +394,18 @@ pub const graphicalcontext = struct {
         imagememorybarrier.subresourceRange.baseArrayLayer = 0;
         imagememorybarrier.subresourceRange.layerCount = 1;
 
-        var barrierdepinfo: vk.VkDependencyInfo = {};
-        barrierdepinfo.sType = vk.VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-        barrierdepinfo.pNext = null;
-        barrierdepinfo.dependencyFlags = 0;
-        barrierdepinfo.imageMemoryBarrierCount = 1;
-        barrierdepinfo.pImageMemoryBarriers = &imagememorybarrier;
-
-        vk.vkCmdPipelineBarrier2(commandbuffer, &barrierdepinfo);
+        vk.vkCmdPipelineBarrier(
+            commandbuffer,
+            vk.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+            vk.VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
+            0,
+            0,
+            null,
+            0,
+            null,
+            1,
+            &imagememorybarrier,
+        );
         if (vk.vkEndCommandBuffer(commandbuffer) != vk.VK_SUCCESS) {
             std.log.err("Unable to End Recording Commandbuffer", .{});
             return error.FailedToEndRecordingCommandBuffer;
@@ -541,8 +581,8 @@ pub const graphicalcontext = struct {
         const swapchain = try vkswapchain.swapchain.createswapchain(swapchaincreateparams);
 
         _ = vk.vkDeviceWaitIdle(self.logicaldevice.device);
-        // destroycolorresources(self);
-        // destroydepthresources(self);
+        destroycolorresources(self);
+        destroydepthresources(self);
 
         self.swapchainimageviews.destroyimageviews();
         self.swapchain.freeswapchain();
@@ -556,8 +596,8 @@ pub const graphicalcontext = struct {
             .images = self.swapchain.images,
         };
         self.swapchainimageviews = try vkimage.imageviews.createimageviews(imageviewparams);
-        //try createcolorresources(self);
-        //try createdepthresources(self);
+        try createcolorresources(self);
+        try createdepthresources(self);
         if (swapchainimageslen != self.swapchain.images.len) @panic("swap chain image length mismatch After Recreation");
     }
     fn createshaderstoragebuffer(self: *graphicalcontext) !void {
