@@ -49,7 +49,7 @@ pub const LogicalDevice = struct {
         var physicaldevicefeatures: vk.VkPhysicalDeviceFeatures = .{};
         physicaldevicefeatures.samplerAnisotropy = self.physicaldevice.physicaldevicefeatures.samplerAnisotropy;
         physicaldevicefeatures.sampleRateShading = self.physicaldevice.physicaldevicefeatures.sampleRateShading;
-
+        //enable dynamic renderingfeature
         var physicaldevicedynamicrendering: vk.VkPhysicalDeviceDynamicRenderingFeatures = .{};
         physicaldevicedynamicrendering.sType = vk.VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_FEATURES;
         physicaldevicedynamicrendering.pNext = null;

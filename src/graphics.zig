@@ -125,9 +125,9 @@ fn drawframec(vkinstance: *utilty.graphicalcontext, firstframe: bool) !void {
     //update the uniform buffer with the new delta time reset compute fences and command buffers
     try updateuniformbuffer(currentframe, vkinstance);
     _ = vk.vkResetFences(vkinstance.logicaldevice.device, 1, &vkinstance.computeinflightfences[currentframe]);
-    _ = vk.vkResetCommandBuffer(vkinstance.commandpool.commandbuffers[1][currentframe], 0);
+    _ = vk.vkResetCommandBuffer(vkinstance.commandpool.commandbuffers[2][currentframe], 0);
     //issue compute commands
-    try vkinstance.recordcomputecommandbuffer(vkinstance.commandpool.commandbuffers[1][currentframe], @intCast(currentframe));
+    try vkinstance.recordcomputecommandbuffer(vkinstance.commandpool.commandbuffers[2][currentframe], @intCast(currentframe));
     var computesignalsemaphores: [2]vk.VkSemaphore = .{ vkinstance.computefinishedsephamores[currentframe], vkinstance.computepreviousfinishedsephamores[currentframe] };
     var computewaitsemaphores: [1]vk.VkSemaphore = .{vkinstance.computepreviousfinishedsephamores[previousframe]};
     var computewaitstages: [1]vk.VkPipelineStageFlags = .{
@@ -143,7 +143,7 @@ fn drawframec(vkinstance: *utilty.graphicalcontext, firstframe: bool) !void {
     submitinfo.signalSemaphoreCount = computesignalsemaphores.len;
     submitinfo.pSignalSemaphores = &computesignalsemaphores[0];
     submitinfo.commandBufferCount = 1;
-    submitinfo.pCommandBuffers = &vkinstance.commandpool.commandbuffers[1][currentframe];
+    submitinfo.pCommandBuffers = &vkinstance.commandpool.commandbuffers[2][currentframe];
     if (vk.vkQueueSubmit(vkinstance.logicaldevice.computequeue.queue, 1, &submitinfo, vkinstance.computeinflightfences[currentframe]) != vk.VK_SUCCESS) {
         std.log.err("Unable to Submit Queue", .{});
         return error.QueueSubmissionFailed;
@@ -336,7 +336,7 @@ fn updateuniformbuffer(frame: usize, vkinstance: *utilty.graphicalcontext) !void
     vkinstance.lasttime = currenttime;
     var ubo: drawing.uniformbufferobject_deltatime = undefined;
     ubo.deltatime = vkinstance.lastframetime;
-    const ptr: [*]drawing.uniformbufferobject_deltatime = @ptrCast(@alignCast(vkinstance.uniformbuffermemotymapped[frame]));
+    const ptr: [*]drawing.uniformbufferobject_deltatime = @ptrCast(@alignCast(vkinstance.uniformbuffermemotymapped_compute[frame]));
     ptr[0] = ubo;
 }
 const freetype = @cImport({
