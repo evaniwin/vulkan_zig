@@ -16,11 +16,14 @@ fn createshadermodule(code: []const u32, logicaldevice: *vklogicaldevice.Logical
     }
     return shadermodule;
 }
+
 pub fn creategraphicspipeline(
     logicaldevice: *vklogicaldevice.LogicalDevice,
-    renderpass: vk.VkRenderPass,
     physicaldevice: *vkinstance.PhysicalDevice,
     descriptorsetlayout: vk.VkDescriptorSetLayout,
+    swapchain: vkswapchain.swapchain,
+    depthformat: vk.VkFormat,
+    stencilformat: vk.VkFormat,
     pipelinelayout: *vk.VkPipelineLayout,
     pipeline: *vk.VkPipeline,
 ) !void {
@@ -143,8 +146,18 @@ pub fn creategraphicspipeline(
         return error.PipelineCreationFailedLayout;
     }
 
+    var pipelinerenderingcreateinfo: vk.VkPipelineRenderingCreateInfo = .{};
+    pipelinerenderingcreateinfo.sType = vk.VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
+    pipelinerenderingcreateinfo.pNext = null;
+    pipelinerenderingcreateinfo.colorAttachmentCount = 1;
+    pipelinerenderingcreateinfo.pColorAttachmentFormats = &swapchain.imageformat;
+    pipelinerenderingcreateinfo.depthAttachmentFormat = depthformat;
+    pipelinerenderingcreateinfo.stencilAttachmentFormat = stencilformat;
+    //pipelinerenderingcreateinfo.viewMask=;
+
     var graphicspipelinecreateinfo: vk.VkGraphicsPipelineCreateInfo = .{};
     graphicspipelinecreateinfo.sType = vk.VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+    graphicspipelinecreateinfo.pNext = &pipelinerenderingcreateinfo;
     graphicspipelinecreateinfo.stageCount = shaderstages.len;
     graphicspipelinecreateinfo.pStages = &shaderstages[0];
     graphicspipelinecreateinfo.pVertexInputState = &vertexinputinfo;
@@ -156,7 +169,7 @@ pub fn creategraphicspipeline(
     graphicspipelinecreateinfo.pColorBlendState = &colourblendcreateinfo;
     graphicspipelinecreateinfo.pDynamicState = &dynamicstatecreateinfo;
     graphicspipelinecreateinfo.layout = pipelinelayout.*;
-    graphicspipelinecreateinfo.renderPass = renderpass;
+    graphicspipelinecreateinfo.renderPass = null;
     graphicspipelinecreateinfo.subpass = 0;
     graphicspipelinecreateinfo.basePipelineHandle = null;
     graphicspipelinecreateinfo.basePipelineIndex = -1;
@@ -171,7 +184,7 @@ pub fn creategraphicspipeline(
 }
 pub fn creategraphicspipeline_compute(
     logicaldevice: *vklogicaldevice.LogicalDevice,
-    renderpass: vk.VkRenderPass,
+    swapchain: *vkswapchain.swapchain,
     pipelinelayout: *vk.VkPipelineLayout,
     pipeline: *vk.VkPipeline,
 ) !void {
@@ -283,9 +296,16 @@ pub fn creategraphicspipeline_compute(
         std.log.err("Unable to Create Pipeline Layout", .{});
         return error.PipelineCreationFailedLayout;
     }
+    var pipelinerenderingcreateinfo: vk.VkPipelineRenderingCreateInfo = .{};
+    pipelinerenderingcreateinfo.sType = vk.VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
+    pipelinerenderingcreateinfo.pNext = null;
+    pipelinerenderingcreateinfo.colorAttachmentCount = 1;
+    pipelinerenderingcreateinfo.pColorAttachmentFormats = &swapchain.imageformat;
+    //pipelinerenderingcreateinfo.viewMask=;
 
     var graphicspipelinecreateinfo: vk.VkGraphicsPipelineCreateInfo = .{};
     graphicspipelinecreateinfo.sType = vk.VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+    graphicspipelinecreateinfo.pNext = &pipelinerenderingcreateinfo;
     graphicspipelinecreateinfo.stageCount = shaderstages.len;
     graphicspipelinecreateinfo.pStages = &shaderstages[0];
     graphicspipelinecreateinfo.pVertexInputState = &vertexinputinfo;
@@ -297,7 +317,7 @@ pub fn creategraphicspipeline_compute(
     graphicspipelinecreateinfo.pColorBlendState = &colourblendcreateinfo;
     graphicspipelinecreateinfo.pDynamicState = &dynamicstatecreateinfo;
     graphicspipelinecreateinfo.layout = pipelinelayout.*;
-    graphicspipelinecreateinfo.renderPass = renderpass;
+    graphicspipelinecreateinfo.renderPass = null;
     graphicspipelinecreateinfo.subpass = 0;
     graphicspipelinecreateinfo.basePipelineHandle = null;
     graphicspipelinecreateinfo.basePipelineIndex = -1;
@@ -355,6 +375,7 @@ pub fn createcomputepipeline(
     }
     vk.vkDestroyShaderModule(logicaldevice.device, computeshadermodule, null);
 }
+
 const vertexbufferconfig = struct {
     pub fn getbindingdescription(T: type) vk.VkVertexInputBindingDescription {
         var bindingdescription: vk.VkVertexInputBindingDescription = .{};
@@ -416,4 +437,5 @@ const graphics = @import("../graphics.zig");
 const vklogicaldevice = @import("logicaldevice.zig");
 const vkinstance = @import("instance.zig");
 const drawing = @import("../drawing.zig");
+const vkswapchain = @import("swapchain.zig");
 const std = @import("std");
