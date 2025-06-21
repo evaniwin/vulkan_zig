@@ -1,5 +1,8 @@
 const triangle_frag = @embedFile("../spirv/triangle_frag.spv");
 const triangle_vert = @embedFile("../spirv/triangle_vert.spv");
+const point_frag = @embedFile("../spirv/point_frag.spv");
+const point_comp = @embedFile("../spirv/point_comp.spv");
+const point_vert = @embedFile("../spirv/point_vert.spv");
 fn createshadermodule(code: []const u32, logicaldevice: *vklogicaldevice.LogicalDevice) !vk.VkShaderModule {
     var createinfo: vk.VkShaderModuleCreateInfo = .{};
     createinfo.sType = vk.VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
@@ -19,7 +22,7 @@ pub fn creategraphicspipeline(
     physicaldevice: *vkinstance.PhysicalDevice,
     descriptorsetlayout: vk.VkDescriptorSetLayout,
     pipelinelayout: *vk.VkPipelineLayout,
-    graphicspipeline: *vk.VkPipeline,
+    pipeline: *vk.VkPipeline,
 ) !void {
     //cast a slice of u8 to slice of u32
     const vertcodeslice = @as([*]const u32, @ptrCast(@alignCast(triangle_vert)))[0 .. triangle_vert.len / @sizeOf(u32)];
@@ -158,7 +161,7 @@ pub fn creategraphicspipeline(
     graphicspipelinecreateinfo.basePipelineHandle = null;
     graphicspipelinecreateinfo.basePipelineIndex = -1;
 
-    if (vk.vkCreateGraphicsPipelines(logicaldevice.device, null, 1, &graphicspipelinecreateinfo, null, graphicspipeline) != vk.VK_SUCCESS) {
+    if (vk.vkCreateGraphicsPipelines(logicaldevice.device, null, 1, &graphicspipelinecreateinfo, null, pipeline) != vk.VK_SUCCESS) {
         std.log.err("Unable to Create Pipeline", .{});
         return error.PipelineCreationFailed;
     }
@@ -166,143 +169,192 @@ pub fn creategraphicspipeline(
     vk.vkDestroyShaderModule(logicaldevice.device, vertshadermodule, null);
     vk.vkDestroyShaderModule(logicaldevice.device, fragshadermodule, null);
 }
-pub fn createdescriptorsetlayout(logicaldevice: *vklogicaldevice.LogicalDevice, descriptorsetlayout: *vk.VkDescriptorSetLayout) !void {
-    var ubolayoutbinding: vk.VkDescriptorSetLayoutBinding = .{};
-    ubolayoutbinding.binding = 0;
-    ubolayoutbinding.descriptorType = vk.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    ubolayoutbinding.descriptorCount = 1;
-    ubolayoutbinding.stageFlags = vk.VK_SHADER_STAGE_VERTEX_BIT;
-    ubolayoutbinding.pImmutableSamplers = null;
+pub fn creategraphicspipeline_compute(
+    logicaldevice: *vklogicaldevice.LogicalDevice,
+    renderpass: vk.VkRenderPass,
+    pipelinelayout: *vk.VkPipelineLayout,
+    pipeline: *vk.VkPipeline,
+) !void {
+    //cast a slice of u8 to slice of u32
+    const vertcodeslice = @as([*]const u32, @ptrCast(@alignCast(point_vert)))[0 .. point_vert.len / @sizeOf(u32)];
+    const fragcodeslice = @as([*]const u32, @ptrCast(@alignCast(point_frag)))[0 .. point_frag.len / @sizeOf(u32)];
 
-    var samplerlayoutbinding: vk.VkDescriptorSetLayoutBinding = .{};
-    samplerlayoutbinding.binding = 1;
-    samplerlayoutbinding.descriptorCount = 1;
-    samplerlayoutbinding.descriptorType = vk.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    samplerlayoutbinding.stageFlags = vk.VK_SHADER_STAGE_FRAGMENT_BIT;
-    samplerlayoutbinding.pImmutableSamplers = null;
+    const vertshadermodule = try createshadermodule(vertcodeslice, logicaldevice);
+    const fragshadermodule = try createshadermodule(fragcodeslice, logicaldevice);
 
-    var bindings: [2]vk.VkDescriptorSetLayoutBinding = .{ ubolayoutbinding, samplerlayoutbinding };
-    var layoutcreateinfo: vk.VkDescriptorSetLayoutCreateInfo = .{};
-    layoutcreateinfo.sType = vk.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    layoutcreateinfo.bindingCount = @intCast(bindings.len);
-    layoutcreateinfo.pBindings = &bindings[0];
+    var vertshadercreateinfo: vk.VkPipelineShaderStageCreateInfo = .{};
+    vertshadercreateinfo.sType = vk.VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    vertshadercreateinfo.stage = vk.VK_SHADER_STAGE_VERTEX_BIT;
+    vertshadercreateinfo.module = vertshadermodule;
+    vertshadercreateinfo.pName = "main";
 
-    if (vk.vkCreateDescriptorSetLayout(logicaldevice.device, &layoutcreateinfo, null, descriptorsetlayout) != vk.VK_SUCCESS) {
-        std.log.err("Unable to create Descriptor Set Layout", .{});
-        return error.FailedToCreateDescriptorSetLayout;
+    var fragshadercreateinfo: vk.VkPipelineShaderStageCreateInfo = .{};
+    fragshadercreateinfo.sType = vk.VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    fragshadercreateinfo.stage = vk.VK_SHADER_STAGE_FRAGMENT_BIT;
+    fragshadercreateinfo.module = fragshadermodule;
+    fragshadercreateinfo.pName = "main";
+
+    var shaderstages: [2]vk.VkPipelineShaderStageCreateInfo = .{ vertshadercreateinfo, fragshadercreateinfo };
+    _ = &shaderstages;
+
+    var dynamicstates: [2]vk.VkDynamicState = .{
+        vk.VK_DYNAMIC_STATE_VIEWPORT,
+        vk.VK_DYNAMIC_STATE_SCISSOR,
+    };
+    var dynamicstatecreateinfo: vk.VkPipelineDynamicStateCreateInfo = .{};
+    dynamicstatecreateinfo.sType = vk.VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+    dynamicstatecreateinfo.dynamicStateCount = dynamicstates.len;
+    dynamicstatecreateinfo.pDynamicStates = &dynamicstates[0];
+
+    var bindingdescription = particleconfig.getbindingdescription(drawing.points);
+    var attributedescribtions = particleconfig.getattributedescruptions(drawing.points);
+    //this structure describes the format of the vertex data that will be passed to the vertex shader
+    var vertexinputinfo: vk.VkPipelineVertexInputStateCreateInfo = .{};
+    vertexinputinfo.sType = vk.VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+    vertexinputinfo.vertexBindingDescriptionCount = 1;
+    vertexinputinfo.pVertexBindingDescriptions = &bindingdescription;
+    vertexinputinfo.vertexAttributeDescriptionCount = attributedescribtions.len;
+    vertexinputinfo.pVertexAttributeDescriptions = &attributedescribtions[0];
+
+    var inputassembly: vk.VkPipelineInputAssemblyStateCreateInfo = .{};
+    inputassembly.sType = vk.VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+    inputassembly.topology = vk.VK_PRIMITIVE_TOPOLOGY_POINT_LIST;
+    inputassembly.primitiveRestartEnable = vk.VK_FALSE;
+
+    //viewport and scissor set to null for dynamic
+    var viewportstatecreateinfo: vk.VkPipelineViewportStateCreateInfo = .{};
+    viewportstatecreateinfo.sType = vk.VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+    viewportstatecreateinfo.viewportCount = 1;
+    viewportstatecreateinfo.pViewports = null;
+    viewportstatecreateinfo.scissorCount = 1;
+    viewportstatecreateinfo.pScissors = null;
+
+    var rasterizer: vk.VkPipelineRasterizationStateCreateInfo = .{};
+    rasterizer.sType = vk.VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+    rasterizer.depthBiasEnable = vk.VK_FALSE;
+    rasterizer.rasterizerDiscardEnable = vk.VK_FALSE;
+    rasterizer.polygonMode = vk.VK_POLYGON_MODE_FILL;
+    rasterizer.lineWidth = 1;
+    rasterizer.cullMode = vk.VK_CULL_MODE_BACK_BIT;
+    rasterizer.frontFace = vk.VK_FRONT_FACE_COUNTER_CLOCKWISE;
+    rasterizer.depthBiasEnable = vk.VK_FALSE;
+    rasterizer.depthBiasConstantFactor = 0;
+    rasterizer.depthBiasClamp = 0;
+    rasterizer.depthBiasSlopeFactor = 0;
+
+    var multisampling: vk.VkPipelineMultisampleStateCreateInfo = .{};
+    multisampling.sType = vk.VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+    multisampling.sampleShadingEnable = vk.VK_FALSE;
+    multisampling.rasterizationSamples = vk.VK_SAMPLE_COUNT_1_BIT;
+    multisampling.minSampleShading = 0.2;
+    multisampling.pSampleMask = null;
+    multisampling.alphaToCoverageEnable = vk.VK_FALSE;
+    multisampling.alphaToOneEnable = vk.VK_FALSE;
+
+    var colorblendattachment: vk.VkPipelineColorBlendAttachmentState = .{};
+    colorblendattachment.colorWriteMask = vk.VK_COLOR_COMPONENT_R_BIT | vk.VK_COLOR_COMPONENT_G_BIT | vk.VK_COLOR_COMPONENT_B_BIT | vk.VK_COLOR_COMPONENT_A_BIT;
+    colorblendattachment.blendEnable = vk.VK_FALSE;
+    colorblendattachment.srcColorBlendFactor = vk.VK_BLEND_FACTOR_SRC_ALPHA;
+    colorblendattachment.dstColorBlendFactor = vk.VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+    colorblendattachment.colorBlendOp = vk.VK_BLEND_OP_ADD;
+    colorblendattachment.srcAlphaBlendFactor = vk.VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+    colorblendattachment.dstAlphaBlendFactor = vk.VK_BLEND_FACTOR_ZERO;
+    colorblendattachment.alphaBlendOp = vk.VK_BLEND_OP_ADD;
+
+    var colourblendcreateinfo: vk.VkPipelineColorBlendStateCreateInfo = .{};
+    colourblendcreateinfo.sType = vk.VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+    colourblendcreateinfo.logicOpEnable = vk.VK_FALSE;
+    colourblendcreateinfo.logicOp = vk.VK_LOGIC_OP_COPY;
+    colourblendcreateinfo.attachmentCount = 1;
+    colourblendcreateinfo.pAttachments = &colorblendattachment;
+    colourblendcreateinfo.blendConstants[0] = 0;
+    colourblendcreateinfo.blendConstants[1] = 0;
+    colourblendcreateinfo.blendConstants[2] = 0;
+    colourblendcreateinfo.blendConstants[3] = 0;
+
+    var pipelinelayoutcreateinfo: vk.VkPipelineLayoutCreateInfo = .{};
+    pipelinelayoutcreateinfo.sType = vk.VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    pipelinelayoutcreateinfo.setLayoutCount = 0;
+    pipelinelayoutcreateinfo.pSetLayouts = null;
+    pipelinelayoutcreateinfo.pushConstantRangeCount = 0;
+    pipelinelayoutcreateinfo.pPushConstantRanges = null;
+
+    if (vk.vkCreatePipelineLayout(logicaldevice.device, &pipelinelayoutcreateinfo, null, pipelinelayout) != vk.VK_SUCCESS) {
+        std.log.err("Unable to Create Pipeline Layout", .{});
+        return error.PipelineCreationFailedLayout;
     }
-}
-pub fn destroydescriptorsetlayout(logicaldevice: *vklogicaldevice.LogicalDevice, descriptorsetlayout: vk.VkDescriptorSetLayout) void {
-    vk.vkDestroyDescriptorSetLayout(logicaldevice.device, descriptorsetlayout, null);
-}
 
-pub const descriptorpoolcreateinfo = struct {
-    allocator: std.mem.Allocator,
+    var graphicspipelinecreateinfo: vk.VkGraphicsPipelineCreateInfo = .{};
+    graphicspipelinecreateinfo.sType = vk.VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+    graphicspipelinecreateinfo.stageCount = shaderstages.len;
+    graphicspipelinecreateinfo.pStages = &shaderstages[0];
+    graphicspipelinecreateinfo.pVertexInputState = &vertexinputinfo;
+    graphicspipelinecreateinfo.pInputAssemblyState = &inputassembly;
+    graphicspipelinecreateinfo.pViewportState = &viewportstatecreateinfo;
+    graphicspipelinecreateinfo.pRasterizationState = &rasterizer;
+    graphicspipelinecreateinfo.pMultisampleState = &multisampling;
+    graphicspipelinecreateinfo.pDepthStencilState = null;
+    graphicspipelinecreateinfo.pColorBlendState = &colourblendcreateinfo;
+    graphicspipelinecreateinfo.pDynamicState = &dynamicstatecreateinfo;
+    graphicspipelinecreateinfo.layout = pipelinelayout.*;
+    graphicspipelinecreateinfo.renderPass = renderpass;
+    graphicspipelinecreateinfo.subpass = 0;
+    graphicspipelinecreateinfo.basePipelineHandle = null;
+    graphicspipelinecreateinfo.basePipelineIndex = -1;
+
+    if (vk.vkCreateGraphicsPipelines(logicaldevice.device, null, 1, &graphicspipelinecreateinfo, null, pipeline) != vk.VK_SUCCESS) {
+        std.log.err("Unable to Create Pipeline", .{});
+        return error.PipelineCreationFailed;
+    }
+
+    vk.vkDestroyShaderModule(logicaldevice.device, vertshadermodule, null);
+    vk.vkDestroyShaderModule(logicaldevice.device, fragshadermodule, null);
+}
+pub fn createcomputepipeline(
     logicaldevice: *vklogicaldevice.LogicalDevice,
     descriptorsetlayout: vk.VkDescriptorSetLayout,
-    descriptorcount: u32,
-};
-pub const descriptorpool = struct {
-    allocator: std.mem.Allocator,
-    logicaldevice: *vklogicaldevice.LogicalDevice,
-    descriptorsetlayout: vk.VkDescriptorSetLayout,
-    descriptorpool: vk.VkDescriptorPool,
-    descriptorcount: u32,
-    descriptorsets: []vk.VkDescriptorSet,
-    pub fn createdescriptorpool(descriptorpoolcreateparams: descriptorpoolcreateinfo) !*descriptorpool {
-        const self: *descriptorpool = try descriptorpoolcreateparams.allocator.create(descriptorpool);
-        self.allocator = descriptorpoolcreateparams.allocator;
-        self.logicaldevice = descriptorpoolcreateparams.logicaldevice;
-        self.descriptorcount = descriptorpoolcreateparams.descriptorcount;
-        self.descriptorsetlayout = descriptorpoolcreateparams.descriptorsetlayout;
+    pipelinelayout: *vk.VkPipelineLayout,
+    pipeline: *vk.VkPipeline,
+) !void {
+    const computecodeslice = @as([*]const u32, @ptrCast(@alignCast(point_comp)))[0 .. point_comp.len / @sizeOf(u32)];
 
-        var descriptorpoolsizes: [2]vk.VkDescriptorPoolSize = undefined;
-        descriptorpoolsizes[0].type = vk.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-        descriptorpoolsizes[0].descriptorCount = self.descriptorcount;
-        descriptorpoolsizes[1].type = vk.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        descriptorpoolsizes[1].descriptorCount = self.descriptorcount;
+    const computeshadermodule = try createshadermodule(computecodeslice, logicaldevice);
 
-        var poolcreateinfo: vk.VkDescriptorPoolCreateInfo = .{};
-        poolcreateinfo.sType = vk.VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-        poolcreateinfo.poolSizeCount = @intCast(descriptorpoolsizes.len);
-        poolcreateinfo.pPoolSizes = &descriptorpoolsizes[0];
-        poolcreateinfo.maxSets = self.descriptorcount;
+    var computeshadercreateinfo: vk.VkPipelineShaderStageCreateInfo = .{};
+    computeshadercreateinfo.sType = vk.VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    computeshadercreateinfo.stage = vk.VK_SHADER_STAGE_COMPUTE_BIT;
+    computeshadercreateinfo.module = computeshadermodule;
+    computeshadercreateinfo.pName = "main";
 
-        if (vk.vkCreateDescriptorPool(self.logicaldevice.device, &poolcreateinfo, null, &self.descriptorpool) != vk.VK_SUCCESS) {
-            std.log.err("Unable to create Descriptor Pool", .{});
-            return error.FailedToCreateDescriptorPool;
-        }
-        return self;
+    var setlayouts: [1]vk.VkDescriptorSetLayout = .{descriptorsetlayout};
+    var pipelinelayoutcreateinfo: vk.VkPipelineLayoutCreateInfo = .{};
+    pipelinelayoutcreateinfo.sType = vk.VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    pipelinelayoutcreateinfo.setLayoutCount = 1;
+    pipelinelayoutcreateinfo.pSetLayouts = &setlayouts[0];
+    pipelinelayoutcreateinfo.pushConstantRangeCount = 0;
+    pipelinelayoutcreateinfo.pPushConstantRanges = null;
+    pipelinelayoutcreateinfo.flags = 0;
+    pipelinelayoutcreateinfo.pNext = null;
+
+    if (vk.vkCreatePipelineLayout(logicaldevice.device, &pipelinelayoutcreateinfo, null, pipelinelayout) != vk.VK_SUCCESS) {
+        std.log.err("Unable to Create Pipeline Layout", .{});
+        return error.PipelineCreationFailedLayout;
     }
-    pub fn destroydescriptorpool(self: *descriptorpool) void {
-        vk.vkDestroyDescriptorPool(self.logicaldevice.device, self.descriptorpool, null);
-        self.destroydescriptorSets();
-        self.allocator.destroy(self);
+    var pipelinecreateinfo: vk.VkComputePipelineCreateInfo = .{};
+    pipelinecreateinfo.sType = vk.VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+    pipelinecreateinfo.pNext = null;
+    pipelinecreateinfo.flags = 0;
+    pipelinecreateinfo.stage = computeshadercreateinfo;
+    pipelinecreateinfo.layout = pipelinelayout.*;
+    pipelinecreateinfo.basePipelineHandle = null;
+    pipelinecreateinfo.basePipelineIndex = 0;
+
+    if (vk.vkCreateComputePipelines(logicaldevice.device, null, 1, &pipelinecreateinfo, null, pipeline) != vk.VK_SUCCESS) {
+        std.log.err("Unable to Create compute Pipeline", .{});
+        return error.PipelineCreationFailed;
     }
-    pub fn createdescriptorSets(
-        self: *descriptorpool,
-        uniformbuffer: []vk.VkBuffer,
-        textureimageview: vk.VkImageView,
-        textureimagesampler: vk.VkSampler,
-    ) !void {
-        var descriptorsetlayouts: []vk.VkDescriptorSetLayout = try self.allocator.alloc(vk.VkDescriptorSetLayout, self.descriptorcount);
-        defer self.allocator.free(descriptorsetlayouts);
-        for (0..self.descriptorcount) |i| {
-            descriptorsetlayouts[i] = self.descriptorsetlayout;
-        }
-        self.descriptorsets = try self.allocator.alloc(vk.VkDescriptorSet, self.descriptorcount);
-
-        var descriptorsetallocinfo: vk.VkDescriptorSetAllocateInfo = .{};
-        descriptorsetallocinfo.sType = vk.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-        descriptorsetallocinfo.descriptorPool = self.descriptorpool;
-        descriptorsetallocinfo.descriptorSetCount = @intCast(self.descriptorcount);
-        descriptorsetallocinfo.pSetLayouts = &descriptorsetlayouts[0];
-
-        if (vk.vkAllocateDescriptorSets(self.logicaldevice.device, &descriptorsetallocinfo, &self.descriptorsets[0]) != vk.VK_SUCCESS) {
-            std.log.err("Unable to create Descriptor Sets", .{});
-            return error.FailedToCreateDescriptorSets;
-        }
-        for (0..self.descriptorcount) |i| {
-            var bufferinfo: vk.VkDescriptorBufferInfo = .{};
-            bufferinfo.buffer = uniformbuffer[i];
-            bufferinfo.offset = 0;
-            bufferinfo.range = @sizeOf(drawing.uniformbufferobject);
-
-            var imageinfo: vk.VkDescriptorImageInfo = .{};
-            imageinfo.imageLayout = vk.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-            imageinfo.imageView = textureimageview;
-            imageinfo.sampler = textureimagesampler;
-
-            var writedescriptorset: [2]vk.VkWriteDescriptorSet = undefined;
-            writedescriptorset[0].sType = vk.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            writedescriptorset[0].dstSet = self.descriptorsets[i];
-            writedescriptorset[0].dstBinding = 0;
-            writedescriptorset[0].dstArrayElement = 0;
-            writedescriptorset[0].descriptorType = vk.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-            writedescriptorset[0].descriptorCount = 1;
-            writedescriptorset[0].pBufferInfo = &bufferinfo;
-            writedescriptorset[0].pImageInfo = null;
-            writedescriptorset[0].pTexelBufferView = null;
-            writedescriptorset[0].pNext = null;
-
-            writedescriptorset[1].sType = vk.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            writedescriptorset[1].dstSet = self.descriptorsets[i];
-            writedescriptorset[1].dstBinding = 1;
-            writedescriptorset[1].dstArrayElement = 0;
-            writedescriptorset[1].descriptorType = vk.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-            writedescriptorset[1].descriptorCount = 1;
-            writedescriptorset[1].pBufferInfo = null;
-            writedescriptorset[1].pImageInfo = &imageinfo;
-            writedescriptorset[1].pTexelBufferView = null;
-            writedescriptorset[1].pNext = null;
-
-            vk.vkUpdateDescriptorSets(self.logicaldevice.device, writedescriptorset.len, &writedescriptorset[0], 0, null);
-        }
-    }
-    fn destroydescriptorSets(self: *descriptorpool) void {
-        self.allocator.free(self.descriptorsets);
-    }
-};
+    vk.vkDestroyShaderModule(logicaldevice.device, computeshadermodule, null);
+}
 const vertexbufferconfig = struct {
     pub fn getbindingdescription(T: type) vk.VkVertexInputBindingDescription {
         var bindingdescription: vk.VkVertexInputBindingDescription = .{};
@@ -327,6 +379,34 @@ const vertexbufferconfig = struct {
         attributedescriptions[2].location = 2;
         attributedescriptions[2].format = vk.VK_FORMAT_R32G32_SFLOAT;
         attributedescriptions[2].offset = @offsetOf(T, "texcoord");
+
+        return attributedescriptions;
+    }
+};
+const particleconfig = struct {
+    pub fn getbindingdescription(T: type) vk.VkVertexInputBindingDescription {
+        var bindingdescription: vk.VkVertexInputBindingDescription = .{};
+        bindingdescription.binding = 0;
+        bindingdescription.stride = @sizeOf(T);
+        bindingdescription.inputRate = vk.VK_VERTEX_INPUT_RATE_VERTEX;
+        return bindingdescription;
+    }
+    pub fn getattributedescruptions(T: type) [3]vk.VkVertexInputAttributeDescription {
+        var attributedescriptions: [3]vk.VkVertexInputAttributeDescription = undefined;
+        attributedescriptions[0].binding = 0;
+        attributedescriptions[0].location = 0;
+        attributedescriptions[0].format = vk.VK_FORMAT_R32G32B32_SFLOAT;
+        attributedescriptions[0].offset = @offsetOf(T, "position");
+
+        attributedescriptions[1].binding = 0;
+        attributedescriptions[1].location = 1;
+        attributedescriptions[1].format = vk.VK_FORMAT_R32G32B32_SFLOAT;
+        attributedescriptions[1].offset = @offsetOf(T, "velocity");
+
+        attributedescriptions[2].binding = 0;
+        attributedescriptions[2].location = 2;
+        attributedescriptions[2].format = vk.VK_FORMAT_R32G32_SFLOAT;
+        attributedescriptions[2].offset = @offsetOf(T, "color");
 
         return attributedescriptions;
     }

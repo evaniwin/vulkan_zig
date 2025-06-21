@@ -3,12 +3,19 @@ pub const data = extern struct {
     color: [3]f32,
     texcoord: [2]f32,
 };
-pub const uniformbufferobject = extern struct {
+pub const points = extern struct {
+    position: [2]f32,
+    velocity: [2]f32,
+    color: [4]f32,
+};
+pub const uniformbufferobject_view_lookat_projection_matrix = extern struct {
     model: [4][4]f32 align(16),
     view: [4][4]f32 align(16),
     projection: [4][4]f32 align(16),
 };
-
+pub const uniformbufferobject_deltatime = extern struct {
+    deltatime: f32 = 1,
+};
 pub const vk = graphics.vk;
 const graphics = @import("graphics.zig");
 const helper = @import("helpers.zig");

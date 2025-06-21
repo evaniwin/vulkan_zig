@@ -35,7 +35,7 @@ pub const Instance = struct {
         var instanceextensions: [][*c]const u8 = undefined;
         try getrequiredextensions(self, instancecreateprop, &extensioncount, &instanceextensions);
         defer self.allocator.free(instanceextensions);
-        checkextensions(self.allocator, extensioncount, &instanceextensions[0]);
+        try checkextensions(self.allocator, extensioncount, &instanceextensions[0]);
         createinfo.enabledExtensionCount = extensioncount;
         createinfo.ppEnabledExtensionNames = &instanceextensions[0];
 
@@ -106,14 +106,11 @@ pub const Instance = struct {
         allocator: std.mem.Allocator,
         reqextensioncount: u32,
         reqextensions: [*c]const [*c]const u8,
-    ) void {
+    ) !void {
         var vkextensioncount: u32 = 0;
         _ = vk.vkEnumerateInstanceExtensionProperties(null, &vkextensioncount, null);
 
-        var vkextensions = allocator.alloc(vk.VkExtensionProperties, vkextensioncount) catch |err| {
-            std.log.err("Unable to allocate memory for vulkan check extension array {s}", .{@errorName(err)});
-            return;
-        };
+        var vkextensions = try allocator.alloc(vk.VkExtensionProperties, vkextensioncount);
         defer allocator.free(vkextensions);
         _ = vk.vkEnumerateInstanceExtensionProperties(null, &vkextensioncount, &vkextensions[0]);
 
@@ -137,6 +134,9 @@ pub const Instance = struct {
         }
 
         std.log.info("{d}/{d} extensions found", .{ extensions, reqextensioncount });
+        if (extensions != reqextensioncount) {
+            return error.UnableToFindRequiredExtensions;
+        }
     }
     fn checkvalidationlayersupport(allocator: std.mem.Allocator, instancecreateprop: instancecreateinfo) bool {
         var layerCount: u32 = undefined;
