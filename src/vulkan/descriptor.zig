@@ -72,12 +72,14 @@ pub const descriptorpool = struct {
     descriptorpool: vk.VkDescriptorPool,
     descriptorcount: u32,
     descriptorsets: []vk.VkDescriptorSet,
+    descriptorsetallocated: bool,
     pub fn init_createdescriptorpool_graphics(descriptorpoolcreateparams: descriptorpoolcreateinfo) !*descriptorpool {
         const self: *descriptorpool = try descriptorpoolcreateparams.allocator.create(descriptorpool);
         self.allocator = descriptorpoolcreateparams.allocator;
         self.logicaldevice = descriptorpoolcreateparams.logicaldevice;
         self.descriptorcount = descriptorpoolcreateparams.descriptorcount;
         self.descriptorsetlayout = descriptorpoolcreateparams.descriptorsetlayout;
+        self.descriptorsetallocated = false;
 
         var descriptorpoolsizes: [2]vk.VkDescriptorPoolSize = undefined;
         descriptorpoolsizes[0].type = vk.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
@@ -103,6 +105,7 @@ pub const descriptorpool = struct {
         self.logicaldevice = descriptorpoolcreateparams.logicaldevice;
         self.descriptorcount = descriptorpoolcreateparams.descriptorcount;
         self.descriptorsetlayout = descriptorpoolcreateparams.descriptorsetlayout;
+        self.descriptorsetallocated = false;
 
         var descriptorpoolsizes: [2]vk.VkDescriptorPoolSize = undefined;
         descriptorpoolsizes[0].type = vk.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
@@ -134,12 +137,17 @@ pub const descriptorpool = struct {
         textureimageview: vk.VkImageView,
         textureimagesampler: vk.VkSampler,
     ) !void {
+        if (self.descriptorsetallocated) {
+            std.log.err("Attempt to allocate an already allocated descriptorset", .{});
+            return error.DescriptorsetAlreadyAllocated;
+        }
         var descriptorsetlayouts: []vk.VkDescriptorSetLayout = try self.allocator.alloc(vk.VkDescriptorSetLayout, self.descriptorcount);
         defer self.allocator.free(descriptorsetlayouts);
         for (0..self.descriptorcount) |i| {
             descriptorsetlayouts[i] = self.descriptorsetlayout;
         }
         self.descriptorsets = try self.allocator.alloc(vk.VkDescriptorSet, self.descriptorcount);
+        self.descriptorsetallocated = true;
 
         var descriptorsetallocinfo: vk.VkDescriptorSetAllocateInfo = .{};
         descriptorsetallocinfo.sType = vk.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
@@ -194,12 +202,17 @@ pub const descriptorpool = struct {
         shaderstoragebuffer: []vk.VkBuffer,
         particlecount: usize,
     ) !void {
+        if (self.descriptorsetallocated) {
+            std.log.err("Attempt to allocate an already allocated descriptorset", .{});
+            return error.DescriptorsetAlreadyAllocated;
+        }
         var descriptorsetlayouts: []vk.VkDescriptorSetLayout = try self.allocator.alloc(vk.VkDescriptorSetLayout, self.descriptorcount);
         defer self.allocator.free(descriptorsetlayouts);
         for (0..self.descriptorcount) |i| {
             descriptorsetlayouts[i] = self.descriptorsetlayout;
         }
         self.descriptorsets = try self.allocator.alloc(vk.VkDescriptorSet, self.descriptorcount);
+        self.descriptorsetallocated = true;
 
         var descriptorsetallocinfo: vk.VkDescriptorSetAllocateInfo = .{};
         descriptorsetallocinfo.sType = vk.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
@@ -265,7 +278,9 @@ pub const descriptorpool = struct {
         }
     }
     fn destroydescriptorSets(self: *descriptorpool) void {
-        self.allocator.free(self.descriptorsets);
+        if (self.descriptorsetallocated) {
+            self.allocator.free(self.descriptorsets);
+        }
     }
 };
 

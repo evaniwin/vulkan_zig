@@ -21,7 +21,7 @@ pub fn creategraphicspipeline(
     logicaldevice: *vklogicaldevice.LogicalDevice,
     physicaldevice: *vkinstance.PhysicalDevice,
     descriptorsetlayout: vk.VkDescriptorSetLayout,
-    swapchain: vkswapchain.swapchain,
+    swapchain: *vkswapchain.swapchain,
     depthformat: vk.VkFormat,
     stencilformat: vk.VkFormat,
     pipelinelayout: *vk.VkPipelineLayout,
