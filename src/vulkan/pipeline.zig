@@ -55,8 +55,8 @@ pub fn creategraphicspipeline(
     dynamicstatecreateinfo.dynamicStateCount = dynamicstates.len;
     dynamicstatecreateinfo.pDynamicStates = &dynamicstates[0];
 
-    var bindingdescription = vertexbufferconfig.getbindingdescription(drawing.data);
-    var attributedescribtions = vertexbufferconfig.getattributedescruptions(drawing.data);
+    var bindingdescription = drawing.data.getbindingdescription();
+    var attributedescribtions = drawing.data.getattributedescruptions();
     //this structure describes the format of the vertex data that will be passed to the vertex shader
     var vertexinputinfo: vk.VkPipelineVertexInputStateCreateInfo = .{};
     vertexinputinfo.sType = vk.VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
@@ -219,8 +219,8 @@ pub fn creategraphicspipeline_compute(
     dynamicstatecreateinfo.dynamicStateCount = dynamicstates.len;
     dynamicstatecreateinfo.pDynamicStates = &dynamicstates[0];
 
-    var bindingdescription = particleconfig.getbindingdescription(drawing.points);
-    var attributedescribtions = particleconfig.getattributedescruptions(drawing.points);
+    var bindingdescription = drawing.points.getbindingdescription();
+    var attributedescribtions = drawing.points.getattributedescruptions();
     //this structure describes the format of the vertex data that will be passed to the vertex shader
     var vertexinputinfo: vk.VkPipelineVertexInputStateCreateInfo = .{};
     vertexinputinfo.sType = vk.VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
@@ -376,62 +376,6 @@ pub fn createcomputepipeline(
     vk.vkDestroyShaderModule(logicaldevice.device, computeshadermodule, null);
 }
 
-const vertexbufferconfig = struct {
-    pub fn getbindingdescription(T: type) vk.VkVertexInputBindingDescription {
-        var bindingdescription: vk.VkVertexInputBindingDescription = .{};
-        bindingdescription.binding = 0;
-        bindingdescription.stride = @sizeOf(T);
-        bindingdescription.inputRate = vk.VK_VERTEX_INPUT_RATE_VERTEX;
-        return bindingdescription;
-    }
-    pub fn getattributedescruptions(T: type) [3]vk.VkVertexInputAttributeDescription {
-        var attributedescriptions: [3]vk.VkVertexInputAttributeDescription = undefined;
-        attributedescriptions[0].binding = 0;
-        attributedescriptions[0].location = 0;
-        attributedescriptions[0].format = vk.VK_FORMAT_R32G32B32_SFLOAT;
-        attributedescriptions[0].offset = @offsetOf(T, "vertex");
-
-        attributedescriptions[1].binding = 0;
-        attributedescriptions[1].location = 1;
-        attributedescriptions[1].format = vk.VK_FORMAT_R32G32B32_SFLOAT;
-        attributedescriptions[1].offset = @offsetOf(T, "color");
-
-        attributedescriptions[2].binding = 0;
-        attributedescriptions[2].location = 2;
-        attributedescriptions[2].format = vk.VK_FORMAT_R32G32_SFLOAT;
-        attributedescriptions[2].offset = @offsetOf(T, "texcoord");
-
-        return attributedescriptions;
-    }
-};
-const particleconfig = struct {
-    pub fn getbindingdescription(T: type) vk.VkVertexInputBindingDescription {
-        var bindingdescription: vk.VkVertexInputBindingDescription = .{};
-        bindingdescription.binding = 0;
-        bindingdescription.stride = @sizeOf(T);
-        bindingdescription.inputRate = vk.VK_VERTEX_INPUT_RATE_VERTEX;
-        return bindingdescription;
-    }
-    pub fn getattributedescruptions(T: type) [3]vk.VkVertexInputAttributeDescription {
-        var attributedescriptions: [3]vk.VkVertexInputAttributeDescription = undefined;
-        attributedescriptions[0].binding = 0;
-        attributedescriptions[0].location = 0;
-        attributedescriptions[0].format = vk.VK_FORMAT_R32G32B32_SFLOAT;
-        attributedescriptions[0].offset = @offsetOf(T, "position");
-
-        attributedescriptions[1].binding = 0;
-        attributedescriptions[1].location = 1;
-        attributedescriptions[1].format = vk.VK_FORMAT_R32G32B32_SFLOAT;
-        attributedescriptions[1].offset = @offsetOf(T, "velocity");
-
-        attributedescriptions[2].binding = 0;
-        attributedescriptions[2].location = 2;
-        attributedescriptions[2].format = vk.VK_FORMAT_R32G32_SFLOAT;
-        attributedescriptions[2].offset = @offsetOf(T, "color");
-
-        return attributedescriptions;
-    }
-};
 pub const vk = graphics.vk;
 const graphics = @import("../graphics.zig");
 const vklogicaldevice = @import("logicaldevice.zig");
