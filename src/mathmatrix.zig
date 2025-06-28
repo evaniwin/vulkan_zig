@@ -23,10 +23,10 @@ pub fn perspective(fov: f32, width: f32, height: f32, near: f32, far: f32) [4][4
 
 pub fn orthographic(left: f32, right: f32, bottom: f32, top: f32, near: f32, far: f32) [4][4]f32 {
     return .{
-        .{ 2.0 / (right - left), 0.0, 0.0, -(right + left) / (right - left) },
-        .{ 0.0, 2.0 / (top - bottom), 0.0, -(top + bottom) / (top - bottom) },
-        .{ 0.0, 0.0, -2.0 / (far - near), -(far + near) / (far - near) },
-        .{ 0.0, 0.0, 0.0, 1.0 },
+        .{ 2.0 / (right - left), 0.0, 0.0, 0.0 },
+        .{ 0.0, 2.0 / (top - bottom), 0.0, 0.0 },
+        .{ 0.0, 0.0, 1.0 / (far - near), 0.0 },
+        .{ -(right + left) / (right - left), -(top + bottom) / (top - bottom), -near / (far - near), 1.0 },
     };
 }
 pub fn rotate(angle: f32, axis: [3]f32) [4][4]f32 {
