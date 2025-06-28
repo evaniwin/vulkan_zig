@@ -63,6 +63,7 @@ pub const descriptorpoolcreateinfo = struct {
     allocator: std.mem.Allocator,
     logicaldevice: *vklogicaldevice.LogicalDevice,
     descriptorsetlayout: vk.VkDescriptorSetLayout,
+    descriptorpoolsizes: []vk.VkDescriptorPoolSize,
     descriptorcount: u32,
 };
 pub const descriptorpool = struct {
@@ -73,7 +74,7 @@ pub const descriptorpool = struct {
     descriptorcount: u32,
     descriptorsets: []vk.VkDescriptorSet,
     descriptorsetallocated: bool,
-    pub fn init_createdescriptorpool_graphics(descriptorpoolcreateparams: descriptorpoolcreateinfo) !*descriptorpool {
+    pub fn init_createdescriptorpool(descriptorpoolcreateparams: descriptorpoolcreateinfo) !*descriptorpool {
         const self: *descriptorpool = try descriptorpoolcreateparams.allocator.create(descriptorpool);
         self.allocator = descriptorpoolcreateparams.allocator;
         self.logicaldevice = descriptorpoolcreateparams.logicaldevice;
@@ -81,43 +82,10 @@ pub const descriptorpool = struct {
         self.descriptorsetlayout = descriptorpoolcreateparams.descriptorsetlayout;
         self.descriptorsetallocated = false;
 
-        var descriptorpoolsizes: [2]vk.VkDescriptorPoolSize = undefined;
-        descriptorpoolsizes[0].type = vk.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-        descriptorpoolsizes[0].descriptorCount = self.descriptorcount;
-        descriptorpoolsizes[1].type = vk.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        descriptorpoolsizes[1].descriptorCount = self.descriptorcount;
-
         var poolcreateinfo: vk.VkDescriptorPoolCreateInfo = .{};
         poolcreateinfo.sType = vk.VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-        poolcreateinfo.poolSizeCount = @intCast(descriptorpoolsizes.len);
-        poolcreateinfo.pPoolSizes = &descriptorpoolsizes[0];
-        poolcreateinfo.maxSets = self.descriptorcount;
-
-        if (vk.vkCreateDescriptorPool(self.logicaldevice.device, &poolcreateinfo, null, &self.descriptorpool) != vk.VK_SUCCESS) {
-            std.log.err("Unable to create Descriptor Pool", .{});
-            return error.FailedToCreateDescriptorPool;
-        }
-        return self;
-    }
-    pub fn init_createdescriptorpool_compute(descriptorpoolcreateparams: descriptorpoolcreateinfo) !*descriptorpool {
-        const self: *descriptorpool = try descriptorpoolcreateparams.allocator.create(descriptorpool);
-        self.allocator = descriptorpoolcreateparams.allocator;
-        self.logicaldevice = descriptorpoolcreateparams.logicaldevice;
-        self.descriptorcount = descriptorpoolcreateparams.descriptorcount;
-        self.descriptorsetlayout = descriptorpoolcreateparams.descriptorsetlayout;
-        self.descriptorsetallocated = false;
-
-        var descriptorpoolsizes: [2]vk.VkDescriptorPoolSize = undefined;
-        descriptorpoolsizes[0].type = vk.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-        descriptorpoolsizes[0].descriptorCount = self.descriptorcount;
-
-        descriptorpoolsizes[1].type = vk.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        descriptorpoolsizes[1].descriptorCount = self.descriptorcount * 2;
-
-        var poolcreateinfo: vk.VkDescriptorPoolCreateInfo = .{};
-        poolcreateinfo.sType = vk.VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-        poolcreateinfo.poolSizeCount = @intCast(descriptorpoolsizes.len);
-        poolcreateinfo.pPoolSizes = &descriptorpoolsizes[0];
+        poolcreateinfo.poolSizeCount = @intCast(descriptorpoolcreateparams.descriptorpoolsizes.len);
+        poolcreateinfo.pPoolSizes = &descriptorpoolcreateparams.descriptorpoolsizes[0];
         poolcreateinfo.maxSets = self.descriptorcount;
 
         if (vk.vkCreateDescriptorPool(self.logicaldevice.device, &poolcreateinfo, null, &self.descriptorpool) != vk.VK_SUCCESS) {

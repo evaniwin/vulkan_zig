@@ -175,13 +175,19 @@ pub const graphicalcontext = struct {
         errdefer destroyindexbuffer(self);
         try createuniformbuffers(self);
         errdefer destroyuniformbuffers(self);
+        var descriptorpoolsizes_3d: [2]vk.VkDescriptorPoolSize = undefined;
+        descriptorpoolsizes_3d[0].type = vk.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        descriptorpoolsizes_3d[0].descriptorCount = @intCast(self.swapchain.images.len);
+        descriptorpoolsizes_3d[1].type = vk.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        descriptorpoolsizes_3d[1].descriptorCount = @intCast(self.swapchain.images.len);
         const descriptorpoolcreateparams_3d: vkdescriptor.descriptorpoolcreateinfo = .{
             .allocator = self.allocator,
             .logicaldevice = self.logicaldevice,
             .descriptorsetlayout = self.descriptorsetlayout_3d,
             .descriptorcount = @intCast(self.swapchain.images.len),
+            .descriptorpoolsizes = &descriptorpoolsizes_3d,
         };
-        self.descriptorpool_3d = try vkdescriptor.descriptorpool.init_createdescriptorpool_graphics(descriptorpoolcreateparams_3d);
+        self.descriptorpool_3d = try vkdescriptor.descriptorpool.init_createdescriptorpool(descriptorpoolcreateparams_3d);
         errdefer self.descriptorpool_3d.destroydescriptorpool();
         try self.descriptorpool_3d.createdescriptorSets_graphics(
             self.uniformbuffer_3d,
@@ -215,13 +221,19 @@ pub const graphicalcontext = struct {
         errdefer destroyshaderstoragebuffer(self);
         try createuniformbuffers_compute(self);
         errdefer destroyuniformbuffers_compute(self);
+        var descriptorpoolsizes_particle: [2]vk.VkDescriptorPoolSize = undefined;
+        descriptorpoolsizes_particle[0].type = vk.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        descriptorpoolsizes_particle[0].descriptorCount = MAX_FRAMES_IN_FLIGHT;
+        descriptorpoolsizes_particle[1].type = vk.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        descriptorpoolsizes_particle[1].descriptorCount = MAX_FRAMES_IN_FLIGHT * 2;
         const descriptorpoolcreateparams_particle: vkdescriptor.descriptorpoolcreateinfo = .{
             .allocator = self.allocator,
             .logicaldevice = self.logicaldevice,
             .descriptorsetlayout = self.descriptorsetlayout_particle,
             .descriptorcount = MAX_FRAMES_IN_FLIGHT,
+            .descriptorpoolsizes = &descriptorpoolsizes_particle,
         };
-        self.descriptorpool_particle = try vkdescriptor.descriptorpool.init_createdescriptorpool_compute(descriptorpoolcreateparams_particle);
+        self.descriptorpool_particle = try vkdescriptor.descriptorpool.init_createdescriptorpool(descriptorpoolcreateparams_particle);
         errdefer self.descriptorpool_particle.destroydescriptorpool();
         try self.descriptorpool_particle.createdescriptorSets_compute(
             self.uniformbuffer_compute,
