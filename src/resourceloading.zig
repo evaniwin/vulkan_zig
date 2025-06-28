@@ -60,18 +60,20 @@ pub fn loadimage(allocator: std.mem.Allocator, miplevels: *u32, pwidth: *c_uint,
 
     png.png_init_io(pngptr, @ptrCast(dir));
     png.png_set_sig_bytes(pngptr, header.len);
-    png.png_read_info(pngptr, pnginfoptr);
 
     png.png_set_expand(pngptr);
     png.png_set_strip_16(pngptr);
     png.png_set_palette_to_rgb(pngptr);
     png.png_set_gray_to_rgb(pngptr);
+    png.png_set_tRNS_to_alpha(pngptr);
     png.png_set_add_alpha(pngptr, 0xFF, png.PNG_FILLER_AFTER);
+
+    png.png_read_info(pngptr, pnginfoptr);
 
     pwidth.* = png.png_get_image_width(pngptr, pnginfoptr);
     pheight.* = png.png_get_image_height(pngptr, pnginfoptr);
     const width: usize = pwidth.*;
-    const height: usize = pwidth.*;
+    const height: usize = pheight.*;
     miplevels.* = @intFromFloat(std.math.floor(std.math.log2(@as(f32, @floatFromInt(@max(width, height))))));
 
     const pixels: []u8 = try allocator.alloc(u8, height * width * 4);
