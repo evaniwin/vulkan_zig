@@ -60,6 +60,11 @@ pub const points = extern struct {
         return attributedescriptions;
     }
 };
+// scalar alignment N
+// two element scalar (vec2) alignment 2N
+// two or three element scalar (vec3 or vec4) alignment 4N ie alignment 16
+// nested structure or matrix alignment 16. for example an array of vec2 should be 16 bytes aligned and the last 8 bytes should be padding
+//or structs in a structs should be 16 bytes akigned even if it is a 'struct in a struct in a struct' all structs should be 16 aligned both inner and outter irrelevent of depth
 pub const uniformbufferobject_view_lookat_projection_matrix = extern struct {
     model: [4][4]f32 align(16),
     view: [4][4]f32 align(16),
