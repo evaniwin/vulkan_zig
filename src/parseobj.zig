@@ -86,7 +86,7 @@ pub const obj = struct {
     fn populatedata(self: *obj, file: std.fs.File) !void {
         try file.seekTo(0);
         var buffer: [1024]u8 = undefined;
-        var readerbuf = std.io.bufferedReader(file.reader());
+        var readerbuf = std.io.bufferedReader(file.deprecatedReader());
         const reader = readerbuf.reader();
         var ind: [3]u32 = .{ 0, 0, 0 };
         while (true) {
@@ -159,7 +159,7 @@ pub const obj = struct {
 
     fn countdata(self: *obj, file: std.fs.File) !void {
         var buffer: [1024]u8 = undefined;
-        var readerbuf = std.io.bufferedReader(file.reader());
+        var readerbuf = std.io.bufferedReader(file.deprecatedReader());
         const reader = readerbuf.reader();
         self.verticesnum = 0;
         self.texcoordsnum = 0;
