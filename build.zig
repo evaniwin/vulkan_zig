@@ -1,4 +1,3 @@
-//! Use `zig init --strip` next time to generate a project without comments.
 const std = @import("std");
 
 // Although this function looks imperative, it does not perform the build
@@ -39,7 +38,7 @@ pub fn build(b: *std.Build) !void {
     // If neither case applies to you, feel free to delete the declaration you
     // don't need and to put everything under a single module.
     const exe = b.addExecutable(.{
-        .name = "drawing_app",
+        .name = "vulkan_zig",
         .root_module = b.createModule(.{
             // b.createModule defines a new module just like b.addModule but,
             // unlike b.addModule, it does not expose the module to consumers of
@@ -54,7 +53,7 @@ pub fn build(b: *std.Build) !void {
         }),
     });
 
-    const compileshadersteps = b.step("compile-shaders", "Compile glsl Shaders");
+    const compileshadersteps = b.step("compile-shaders", "Compile slang Shaders");
     {
         var shader_dir = try std.fs.cwd().openDir("shaders", .{ .iterate = true });
         var iter = shader_dir.iterate();
@@ -63,13 +62,26 @@ pub fn build(b: *std.Build) !void {
             if (file == null) break;
             if (std.mem.endsWith(u8, file.?.name, ".spv")) continue;
             var nametoken = std.mem.tokenizeSequence(u8, file.?.name, ".");
+            const name = nametoken.next().?;
             const compile_cmd = b.addSystemCommand(&.{
-                "glslangValidator",
-                b.fmt("shaders/{s}", .{file.?.name}),
-                "-V",
-                "-o",
-                b.fmt("src/spirv/{s}_{s}.spv", .{ nametoken.next().?, nametoken.next().? }),
+                "/opt/shader-slang-bin/bin/slangc", b.fmt("shaders/{s}", .{file.?.name}),
+                "-target",                          "spirv",
+                "-profile",                         "spirv_1_4",
+                "-emit-spirv-directly",             "-fvk-use-entrypoint-name",
+                "-o",                               b.fmt("src/spirv/{s}.spv", .{name}),
+                "-matrix-layout-row-major",
             });
+            const entrytype = nametoken.next().?;
+            if (entrytype[0] == '1') {
+                compile_cmd.addArgs(&.{ "-entry", "vertMain" });
+            }
+            if (entrytype[1] == '1') {
+                compile_cmd.addArgs(&.{ "-entry", "fragMain" });
+            }
+            if (entrytype[2] == '1') {
+                compile_cmd.addArgs(&.{ "-entry", "compMain" });
+            }
+
             compileshadersteps.dependOn(&compile_cmd.step);
         }
     }

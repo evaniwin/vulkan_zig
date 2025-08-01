@@ -1,8 +1,6 @@
-const triangle_frag = @embedFile("../spirv/triangle_frag.spv");
-const triangle_vert = @embedFile("../spirv/triangle_vert.spv");
-const point_frag = @embedFile("../spirv/point_frag.spv");
-const point_comp = @embedFile("../spirv/point_comp.spv");
-const point_vert = @embedFile("../spirv/point_vert.spv");
+const triangle = @embedFile("../spirv/triangle.spv");
+const point = @embedFile("../spirv/point.spv");
+
 fn createshadermodule(code: []const u32, logicaldevice: *vklogicaldevice.LogicalDevice) !vk.VkShaderModule {
     var createinfo: vk.VkShaderModuleCreateInfo = .{};
     createinfo.sType = vk.VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
@@ -28,23 +26,21 @@ pub fn creategraphicspipeline(
     pipeline: *vk.VkPipeline,
 ) !void {
     //cast a slice of u8 to slice of u32
-    const vertcodeslice = @as([*]const u32, @ptrCast(@alignCast(triangle_vert)))[0 .. triangle_vert.len / @sizeOf(u32)];
-    const fragcodeslice = @as([*]const u32, @ptrCast(@alignCast(triangle_frag)))[0 .. triangle_frag.len / @sizeOf(u32)];
+    const codeslice = @as([*]const u32, @ptrCast(@alignCast(triangle)))[0 .. triangle.len / @sizeOf(u32)];
 
-    const vertshadermodule = try createshadermodule(vertcodeslice, logicaldevice);
-    const fragshadermodule = try createshadermodule(fragcodeslice, logicaldevice);
+    const shadermodule = try createshadermodule(codeslice, logicaldevice);
 
     var vertshadercreateinfo: vk.VkPipelineShaderStageCreateInfo = .{};
     vertshadercreateinfo.sType = vk.VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
     vertshadercreateinfo.stage = vk.VK_SHADER_STAGE_VERTEX_BIT;
-    vertshadercreateinfo.module = vertshadermodule;
-    vertshadercreateinfo.pName = "main";
+    vertshadercreateinfo.module = shadermodule;
+    vertshadercreateinfo.pName = "vertMain";
 
     var fragshadercreateinfo: vk.VkPipelineShaderStageCreateInfo = .{};
     fragshadercreateinfo.sType = vk.VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
     fragshadercreateinfo.stage = vk.VK_SHADER_STAGE_FRAGMENT_BIT;
-    fragshadercreateinfo.module = fragshadermodule;
-    fragshadercreateinfo.pName = "main";
+    fragshadercreateinfo.module = shadermodule;
+    fragshadercreateinfo.pName = "fragMain";
 
     var shaderstages: [2]vk.VkPipelineShaderStageCreateInfo = .{ vertshadercreateinfo, fragshadercreateinfo };
     _ = &shaderstages;
@@ -179,8 +175,7 @@ pub fn creategraphicspipeline(
         return error.PipelineCreationFailed;
     }
 
-    vk.vkDestroyShaderModule(logicaldevice.device, vertshadermodule, null);
-    vk.vkDestroyShaderModule(logicaldevice.device, fragshadermodule, null);
+    vk.vkDestroyShaderModule(logicaldevice.device, shadermodule, null);
 }
 pub fn creategraphicspipeline_compute(
     logicaldevice: *vklogicaldevice.LogicalDevice,
@@ -189,23 +184,21 @@ pub fn creategraphicspipeline_compute(
     pipeline: *vk.VkPipeline,
 ) !void {
     //cast a slice of u8 to slice of u32
-    const vertcodeslice = @as([*]const u32, @ptrCast(@alignCast(point_vert)))[0 .. point_vert.len / @sizeOf(u32)];
-    const fragcodeslice = @as([*]const u32, @ptrCast(@alignCast(point_frag)))[0 .. point_frag.len / @sizeOf(u32)];
+    const codeslice = @as([*]const u32, @ptrCast(@alignCast(point)))[0 .. point.len / @sizeOf(u32)];
 
-    const vertshadermodule = try createshadermodule(vertcodeslice, logicaldevice);
-    const fragshadermodule = try createshadermodule(fragcodeslice, logicaldevice);
+    const shadermodule = try createshadermodule(codeslice, logicaldevice);
 
     var vertshadercreateinfo: vk.VkPipelineShaderStageCreateInfo = .{};
     vertshadercreateinfo.sType = vk.VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
     vertshadercreateinfo.stage = vk.VK_SHADER_STAGE_VERTEX_BIT;
-    vertshadercreateinfo.module = vertshadermodule;
-    vertshadercreateinfo.pName = "main";
+    vertshadercreateinfo.module = shadermodule;
+    vertshadercreateinfo.pName = "vertMain";
 
     var fragshadercreateinfo: vk.VkPipelineShaderStageCreateInfo = .{};
     fragshadercreateinfo.sType = vk.VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
     fragshadercreateinfo.stage = vk.VK_SHADER_STAGE_FRAGMENT_BIT;
-    fragshadercreateinfo.module = fragshadermodule;
-    fragshadercreateinfo.pName = "main";
+    fragshadercreateinfo.module = shadermodule;
+    fragshadercreateinfo.pName = "fragMain";
 
     var shaderstages: [2]vk.VkPipelineShaderStageCreateInfo = .{ vertshadercreateinfo, fragshadercreateinfo };
     _ = &shaderstages;
@@ -327,8 +320,7 @@ pub fn creategraphicspipeline_compute(
         return error.PipelineCreationFailed;
     }
 
-    vk.vkDestroyShaderModule(logicaldevice.device, vertshadermodule, null);
-    vk.vkDestroyShaderModule(logicaldevice.device, fragshadermodule, null);
+    vk.vkDestroyShaderModule(logicaldevice.device, shadermodule, null);
 }
 pub fn createcomputepipeline(
     logicaldevice: *vklogicaldevice.LogicalDevice,
@@ -336,7 +328,7 @@ pub fn createcomputepipeline(
     pipelinelayout: *vk.VkPipelineLayout,
     pipeline: *vk.VkPipeline,
 ) !void {
-    const computecodeslice = @as([*]const u32, @ptrCast(@alignCast(point_comp)))[0 .. point_comp.len / @sizeOf(u32)];
+    const computecodeslice = @as([*]const u32, @ptrCast(@alignCast(point)))[0 .. point.len / @sizeOf(u32)];
 
     const computeshadermodule = try createshadermodule(computecodeslice, logicaldevice);
 
@@ -344,7 +336,7 @@ pub fn createcomputepipeline(
     computeshadercreateinfo.sType = vk.VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
     computeshadercreateinfo.stage = vk.VK_SHADER_STAGE_COMPUTE_BIT;
     computeshadercreateinfo.module = computeshadermodule;
-    computeshadercreateinfo.pName = "main";
+    computeshadercreateinfo.pName = "compMain";
 
     var setlayouts: [1]vk.VkDescriptorSetLayout = .{descriptorsetlayout};
     var pipelinelayoutcreateinfo: vk.VkPipelineLayoutCreateInfo = .{};
