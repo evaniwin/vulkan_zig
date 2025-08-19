@@ -85,15 +85,14 @@ pub const obj = struct {
     }
     fn populatedata(self: *obj, file: std.fs.File) !void {
         try file.seekTo(0);
-        var buffer: [1024]u8 = undefined;
-        var readerbuf = std.io.bufferedReader(file.deprecatedReader());
-        const reader = readerbuf.reader();
+        var buffer: [4096]u8 = undefined;
+        var reader = file.reader(&buffer);
         var ind: [3]u32 = .{ 0, 0, 0 };
         while (true) {
-            const line = reader.readUntilDelimiter(&buffer, '\n') catch |err| switch (err) {
+            const line = reader.interface.takeDelimiterExclusive('\n') catch |err| switch (err) {
                 error.EndOfStream => break,
                 error.StreamTooLong => blk: {
-                    try reader.skipUntilDelimiterOrEof('\n');
+                    _ = try reader.interface.discardDelimiterInclusive('\n');
                     break :blk buffer[0..buffer.len];
                 },
                 else => return err,
@@ -158,17 +157,16 @@ pub const obj = struct {
     }
 
     fn countdata(self: *obj, file: std.fs.File) !void {
-        var buffer: [1024]u8 = undefined;
-        var readerbuf = std.io.bufferedReader(file.deprecatedReader());
-        const reader = readerbuf.reader();
+        var buffer: [4096]u8 = undefined;
+        var reader = file.reader(&buffer);
         self.verticesnum = 0;
         self.texcoordsnum = 0;
         self.facesnum = 0;
         while (true) {
-            const line: []u8 = reader.readUntilDelimiter(&buffer, '\n') catch |err| switch (err) {
+            const line: []u8 = reader.interface.takeDelimiterExclusive('\n') catch |err| switch (err) {
                 error.EndOfStream => break,
                 error.StreamTooLong => blk: {
-                    try reader.skipUntilDelimiterOrEof('\n');
+                    _ = try reader.interface.discardDelimiterInclusive('\n');
                     break :blk buffer[0..buffer.len];
                 },
                 else => return err,
