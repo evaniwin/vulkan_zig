@@ -24,7 +24,7 @@ VSOutput vertMain(VSInput input) {
     VSOutput output;
     output.pointSize = 5.0;
     output.pos = float4(input.inPosition, 1.0, 1.0);
-    output.fragColor = input.inColor.rgb;
+    output.fragColor = input.inColor.rgb + float3(input.velocity.rg,1 )* 0.0001;
     return output;
 }
 
