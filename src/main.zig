@@ -16,7 +16,7 @@ fn render() void {
         return;
     };
 }
-pub var viewportsize: [2]c_int = .{ 400, 400 };
+pub var viewportsize: [2]c_int = .{ 800, 800 };
 pub var running = true;
 const graphics = @import("graphics.zig");
 const std = @import("std");

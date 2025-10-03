@@ -64,11 +64,11 @@ pub fn build(b: *std.Build) !void {
             var nametoken = std.mem.tokenizeSequence(u8, file.?.name, ".");
             const name = nametoken.next().?;
             const compile_cmd = b.addSystemCommand(&.{
-                "/opt/shader-slang-bin/bin/slangc", b.fmt("shaders/{s}", .{file.?.name}),
-                "-target",                          "spirv",
-                "-profile",                         "spirv_1_4",
-                "-emit-spirv-directly",             "-fvk-use-entrypoint-name",
-                "-o",                               b.fmt("src/spirv/{s}.spv", .{name}),
+                "slangc",                   b.fmt("shaders/{s}", .{file.?.name}),
+                "-target",                  "spirv",
+                "-profile",                 "spirv_1_4",
+                "-emit-spirv-directly",     "-fvk-use-entrypoint-name",
+                "-o",                       b.fmt("src/spirv/{s}.spv", .{name}),
                 "-matrix-layout-row-major",
             });
             const entrytype = nametoken.next().?;
